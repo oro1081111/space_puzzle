@@ -426,22 +426,273 @@ function enemyHeadInLikelyPocket(p,x,y){
 }
 
 function styleWeights(style){
-  // 30x30 enclosure-specialized profiles.
+  // 30x30 enclosure-trained profiles.
+  // All three use the same long-horizon planner; weights only change tactical emphasis.
   if(style==='raider')return {
-    cap:410,cap2:145,open:7,open2:5,enemy:13,edge:7,dist:2.7,
-    bridge:52,bridge2:24,revisit:28,block:135,race:24,contest:78,space:5,
-    close:105,edgeLoop:46,corner:20,pocketEnemy:62,future:1.15
+    cap:233,open:9.5,enemy:17.5,edge:1.8,dist:1.75,bridge:17.5,
+    revisit:31,block:148,race:27,contest:86,space:14,
+    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
+    loopDepth:18,beam:44,minExtra:4
   };
   if(style==='frontier')return {
-    cap:365,cap2:130,open:10,open2:7,enemy:7,edge:12,dist:2.2,
-    bridge:44,bridge2:22,revisit:27,block:132,race:19,contest:67,space:8,
-    close:94,edgeLoop:72,corner:28,pocketEnemy:55,future:1.25
+    cap:233,open:13.5,enemy:14,edge:1.6,dist:1.6,bridge:17,
+    revisit:31,block:147,race:25,contest:79,space:18,
+    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
+    loopDepth:18,beam:44,minExtra:4
   };
   return {
-    cap:440,cap2:160,open:8,open2:6,enemy:9,edge:9,dist:2.55,
-    bridge:58,bridge2:28,revisit:30,block:140,race:20,contest:76,space:6,
-    close:118,edgeLoop:58,corner:24,pocketEnemy:68,future:1.35
+    cap:235,open:10,enemy:15,edge:2.0,dist:1.8,bridge:18,
+    revisit:30,block:145,race:24,contest:82,space:15,
+    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
+    loopDepth:18,beam:44,minExtra:4
   };
+}
+
+function estimatePathCapture(p,path){
+  if(!path.length)return 0;
+
+  for(const z of path){
+    const x=z%n,y=(z/n)|0;
+    if(g[y][x]!==-1)return 0;
+    g[y][x]=p.id;
+  }
+
+  const total=n*n;
+  const seen=new Uint8Array(total);
+  const enemyHeads=new Uint8Array(total);
+  const q=new Int32Array(total);
+  for(const o of a)if(o.id!==p.id)enemyHeads[o.y*n+o.x]=1;
+
+  const comps=[];
+  for(let sy=0;sy<n;sy++)for(let sx=0;sx<n;sx++){
+    const start=sy*n+sx;
+    if(seen[start]||g[sy][sx]===p.id)continue;
+
+    let head=0,tail=0,size=0,hasEnemy=false;
+    q[tail++]=start;seen[start]=1;
+
+    while(head<tail){
+      const z=q[head++],x=z%n,y=(z/n)|0;
+      size++;
+      if(enemyHeads[z])hasEnemy=true;
+
+      for(let d=0;d<4;d++){
+        const nx=x+D[d][0],ny=y+D[d][1];
+        if(!inside(nx,ny))continue;
+        const nz=ny*n+nx;
+        if(seen[nz]||g[ny][nx]===p.id)continue;
+        seen[nz]=1;q[tail++]=nz;
+      }
+    }
+    comps.push({size,hasEnemy});
+  }
+
+  for(const z of path){
+    const x=z%n,y=(z/n)|0;
+    g[y][x]=-1;
+  }
+
+  let gain=path.length;
+  if(comps.length<=1)return gain;
+
+  let outside=0;
+  for(let i=1;i<comps.length;i++){
+    if(comps[i].size>comps[outside].size)outside=i;
+  }
+  for(let i=0;i<comps.length;i++){
+    if(i===outside||comps[i].hasEnemy)continue;
+    gain+=comps[i].size;
+  }
+  return gain;
+}
+
+function buildOwnDistance(p){
+  const total=n*n,INF=32767;
+  const dist=new Int16Array(total);
+  dist.fill(INF);
+  const own=new Uint8Array(total);
+  const q=new Int32Array(total);
+  let head=0,tail=0,ownBorder=false;
+
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++){
+    if(g[y][x]!==p.id)continue;
+    const z=y*n+x;
+    own[z]=1;dist[z]=0;q[tail++]=z;
+    if(x===0||x===n-1||y===0||y===n-1)ownBorder=true;
+  }
+
+  while(head<tail){
+    const z=q[head++],x=z%n,y=(z/n)|0,nd=dist[z]+1;
+    for(let d=0;d<4;d++){
+      const nx=x+D[d][0],ny=y+D[d][1];
+      if(!inside(nx,ny))continue;
+      const nz=ny*n+nx;
+      if(dist[nz]<=nd)continue;
+      dist[nz]=nd;q[tail++]=nz;
+    }
+  }
+  return {dist,own,ownBorder};
+}
+
+function findEnclosurePlan(p){
+  const W=styleWeights(p.strategy);
+  if(p.loopCooldown>0)return null;
+
+  const {dist:ownDist,own,ownBorder}=buildOwnDistance(p);
+  const start=p.y*n+p.x;
+  let states=[{
+    h:0,z:start,path:[],dirs:[],
+    minx:p.x,maxx:p.x,miny:p.y,maxy:p.y
+  }];
+
+  let bestScore=-Infinity,bestDirs=null,bestGain=0;
+
+  for(let depth=1;depth<=W.loopDepth;depth++){
+    const next=[];
+
+    for(const st of states){
+      const x=st.z%n,y=(st.z/n)|0;
+
+      for(let d=0;d<4;d++){
+        const nx=x+D[d][0],ny=y+D[d][1];
+        if(!inside(nx,ny)||g[ny][nx]!==-1)continue;
+
+        const z=ny*n+nx;
+        if(st.path.includes(z))continue;
+
+        const path=st.path.concat(z);
+        const dirs=st.dirs.concat(d);
+
+        let adjOwn=false;
+        for(let k=0;k<4;k++){
+          const ax=nx+D[k][0],ay=ny+D[k][1];
+          if(!inside(ax,ay))continue;
+          const az=ay*n+ax;
+          if(own[az]&&(az!==start||depth>=4)){adjOwn=true;break}
+        }
+
+        const touchesUsefulBorder=
+          ownBorder&&(nx===0||nx===n-1||ny===0||ny===n-1);
+
+        if(depth>=4&&(adjOwn||touchesUsefulBorder)){
+          const gain=estimatePathCapture(p,path);
+          const extra=gain-depth;
+
+          if(extra>=W.minExtra){
+            const efficiency=extra/Math.max(1,depth);
+            const score=
+              extra*W.loopArea+
+              efficiency*W.loopEff-
+              depth*W.loopLen;
+
+            if(score>bestScore){
+              bestScore=score;
+              bestDirs=dirs;
+              bestGain=gain;
+            }
+          }
+        }
+
+        const minx=Math.min(st.minx,nx),maxx=Math.max(st.maxx,nx);
+        const miny=Math.min(st.miny,ny),maxy=Math.max(st.maxy,ny);
+        const bbox=(maxx-minx+1)*(maxy-miny+1);
+        const open=emptyAdj(nx,ny);
+        const enemy=nearestEnemyDist(p,nx,ny);
+        const od=ownDist[z];
+        const close=
+          depth>W.loopDepth/2
+            ? Math.max(0,8-od)*5
+            : Math.min(od,6)*1.4;
+        const turnBonus=
+          dirs.length>=2&&dirs[dirs.length-1]!==dirs[dirs.length-2]
+            ? 1.2 : 0;
+
+        const h=
+          bbox*1.6+
+          depth+
+          open*1.8+
+          close+
+          Math.min(enemy,6)*.25+
+          turnBonus+
+          Math.random()*.05;
+
+        next.push({h,z,path,dirs,minx,maxx,miny,maxy});
+      }
+    }
+
+    if(!next.length)break;
+    next.sort((u,v)=>v.h-u.h);
+
+    const kept=[],seenSig=new Set();
+    for(const st of next){
+      const sig=st.z*4+st.dirs[st.dirs.length-1];
+      if(seenSig.has(sig))continue;
+      seenSig.add(sig);
+      kept.push(st);
+      if(kept.length>=W.beam)break;
+    }
+    states=kept;
+  }
+
+  if(!bestDirs)return null;
+  const extra=bestGain-bestDirs.length;
+  return extra*W.loopBias>=W.minExtra*W.loopBias ? bestDirs : null;
+}
+
+function chooseNewTarget(p){
+  let cands=frontierCandidates(p);
+  if(!cands.length)return null;
+
+  const W=styleWeights(p.strategy);
+  for(const c of cands){
+    const k=key(c.x,c.y);
+    const nextX=p.x+D[c.first][0],nextY=p.y+D[c.first][1];
+    const nextKey=key(nextX,nextY);
+    const visit=p.visits.get(nextKey)||0;
+    const block=p.blocked.get(k)||0;
+    const bridge=Math.max(0,ownAdj(p,c.x,c.y)-1);
+    const enemy=enemyAdj(p,c.x,c.y);
+    const edgeBonus=Math.max(0,5-nearEdge(c.x,c.y));
+    const race=opponentRaceMargin(p,c);
+    const space=emptyAdj(c.x,c.y);
+    const contested=race<=0?1:0;
+
+    const nd=nearestEnemyDist(p,c.x,c.y);
+    const pressure=enemy*2+(nd<=4?(5-nd):0);
+
+    c.base=
+      space*W.open+
+      pressure*W.enemy+
+      edgeBonus*W.edge+
+      bridge*W.bridge+
+      Math.max(-3,Math.min(6,race))*W.race-
+      contested*W.contest-
+      c.dist*W.dist-
+      visit*W.revisit-
+      block*W.block;
+
+    if(p.recent.includes(nextKey))c.base-=W.revisit*1.8;
+    if(p.noGain>=6)c.base-=c.dist*1.7+visit*W.revisit;
+    if(p.panic>0||globalPanic>0)c.base-=visit*36+block*70+c.dist*.6;
+  }
+
+  cands.sort((u,v)=>v.base-u.base);
+  const top=cands.slice(0,Math.min(7,cands.length));
+
+  for(const c of top){
+    const gain=estimateCapture(p,c.x,c.y);
+    const room=emptyAdj(c.x,c.y)+Math.max(0,4-nearEdge(c.x,c.y))*.2;
+    c.score=
+      c.base+
+      Math.max(0,gain-1)*W.cap+
+      room*W.space;
+  }
+
+  top.sort((u,v)=>v.score-u.score);
+  const pick=top[0];
+
+  p.commit={x:pick.x,y:pick.y,age:0,score:pick.score};
+  return pick.first;
 }
 
 function chooseNewTarget(p){
@@ -528,21 +779,31 @@ function chooseNewTarget(p){
 }
 
 function aiDirection(p){
-  let d=followEnclosurePlan(p);
-  if(d!==null)return d;
+  if(p.loopPlan&&p.loopPos<p.loopPlan.length){
+    const d=p.loopPlan[p.loopPos];
+    const nx=p.x+D[d][0],ny=p.y+D[d][1];
 
-  if(!ownTouchesEdge(p)){
-    d=edgeSetupDirection(p);
-    if(d!==null)return d;
+    if(empty(nx,ny)){
+      p.loopPos++;
+      return d;
+    }
+
+    p.loopPlan=[];
+    p.loopPos=0;
+    p.loopCooldown=2;
+  }else if(p.loopPlan&&p.loopPlan.length){
+    p.loopPlan=[];
+    p.loopPos=0;
   }
 
-  const W=styleWeights(p.strategy);
-  if(p.noGain>=W.replan||turn<12||Math.random()<.12){
-    const plan=buildEnclosurePlan(p);
-    if(plan){
-      p.enclosurePlan=plan;
-      d=followEnclosurePlan(p);
-      if(d!==null)return d;
+  if(p.loopCooldown>0)p.loopCooldown--;
+
+  if(p.loopCooldown===0){
+    const plan=findEnclosurePlan(p);
+    if(plan&&plan.length){
+      p.loopPlan=plan;
+      p.loopPos=1;
+      return plan[0];
     }
   }
 
@@ -556,16 +817,18 @@ function aiDirection(p){
       const nx=p.x+D[route.first][0],ny=p.y+D[route.first][1];
       const visits=p.visits.get(key(nx,ny))||0;
 
-      const fresh=p.commit.age<=Math.max(5,route.dist+3);
+      const fresh=p.commit.age<=Math.max(8,route.dist+5);
       const notLosingRace=race>=-1||route.dist<=2;
       const notLooping=visits<5||route.dist<=2;
 
-      if(fresh&&notLosingRace&&notLooping&&p.noGain<5)return route.first;
+      if(fresh&&notLosingRace&&notLooping&&p.noGain<7)return route.first;
     }
     p.commit=null;
   }
+
   return chooseNewTarget(p);
 }
+
 function canExpand(p){return frontierCandidates(p).length>0}
 
 function place(x,y){
@@ -641,6 +904,8 @@ function resolveTurn(hdir=null){
     if(d===null||d===undefined||!legal.includes(d)){
       if(!p.h){
         p.commit=null;
+        p.loopPlan=[];
+        p.loopPos=0;
         d=chooseNewTarget(p);
       }
     }
@@ -660,6 +925,9 @@ function resolveTurn(hdir=null){
         if(z.newCell){
           z.p.blocked.set(dest,(z.p.blocked.get(dest)||0)+1);
           if(z.p.commit&&key(z.p.commit.x,z.p.commit.y)===dest)z.p.commit=null;
+          z.p.loopPlan=[];
+          z.p.loopPos=0;
+          z.p.loopCooldown=2;
           if(z.p.enclosurePlan){
             z.p.planBlocked++;
             if(z.p.planBlocked>=2){z.p.enclosurePlan=null;z.p.planBlocked=0}
