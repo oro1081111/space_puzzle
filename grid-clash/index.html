@@ -63,6 +63,7 @@ canvas{display:block;width:100%;height:100%}.stats{display:grid;grid-template-co
 <div id="list" class="list"></div>
 <div class="note">
 玩家可用方向鍵、WASD 或方向按鈕操作。自己的顏色可以自由通過，不會重複計分；其他人的領地仍然是障礙。
+當自己的顏色形成封閉區域時會立即填滿；棋盤邊界也可以作為封閉區域的一部分。
 每台電腦都可以獨立切換策略，而且遊戲進行中也能即時修改。
 </div>
 </div></div>
@@ -144,6 +145,63 @@ function canExpand(p){
     }
   }
   return false;
+}
+
+function recountScores(){
+  const counts=Array(a.length).fill(0);
+  let total=0;
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++){
+    const id=g[y][x];
+    if(id>=0){counts[id]++;total++}
+  }
+  for(const p of a)p.score=counts[p.id]||0;
+  occ=total;
+}
+
+// Treat the player's own colour as walls. If those walls split the remaining
+// board into multiple regions, the largest region is treated as the outside;
+// every smaller region is enclosed. This also allows the board edge itself to
+// serve as part of the enclosure.
+function captureEnclosed(p){
+  const seen=Array.from({length:n},()=>Array(n).fill(false));
+  const comps=[];
+
+  for(let sy=0;sy<n;sy++)for(let sx=0;sx<n;sx++){
+    if(seen[sy][sx]||g[sy][sx]===p.id)continue;
+    const cells=[],q=[[sx,sy]];
+    seen[sy][sx]=true;
+
+    while(q.length){
+      const [x,y]=q.shift();
+      cells.push([x,y]);
+      for(let d=0;d<4;d++){
+        const nx=x+D[d][0],ny=y+D[d][1];
+        if(!inside(nx,ny)||seen[ny][nx]||g[ny][nx]===p.id)continue;
+        seen[ny][nx]=true;
+        q.push([nx,ny]);
+      }
+    }
+    comps.push(cells);
+  }
+
+  if(comps.length<=1)return 0;
+
+  let outside=0;
+  for(let i=1;i<comps.length;i++){
+    if(comps[i].length>comps[outside].length)outside=i;
+  }
+
+  let changed=0;
+  for(let i=0;i<comps.length;i++){
+    if(i===outside)continue;
+    for(const [x,y] of comps[i]){
+      if(g[y][x]!==p.id){
+        g[y][x]=p.id;
+        changed++;
+      }
+    }
+  }
+  return changed;
 }
 
 function choose(p){
@@ -232,15 +290,22 @@ function tick(){
     P.get(key).push({p,d,x,y,newCell:g[y][x]===-1});
   }
 
+  const claimed=new Set();
   for(const arr of P.values()){
     if(arr.length!==1)continue;
     const z=arr[0],p=z.p;
     if(!passable(p,z.x,z.y))continue;
     p.x=z.x;p.y=z.y;p.dir=z.d;p.last=z.d;
     if(z.newCell&&g[z.y][z.x]===-1){
-      g[z.y][z.x]=p.id;p.score++;occ++;
+      g[z.y][z.x]=p.id;
+      claimed.add(p.id);
     }
   }
+
+  // Resolve enclosure after all simultaneous moves. A completed loop, or a
+  // line that closes an area together with the board edge, immediately fills it.
+  for(const id of claimed)captureEnclosed(a[id]);
+  recountScores();
 
   for(const p of a)p.active=canExpand(p);
   draw();stats();
