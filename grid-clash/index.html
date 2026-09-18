@@ -60,7 +60,7 @@ canvas{display:block;width:100%;height:100%}
 <body>
 <div class="wrap"><div class="card">
 <h1>Grid Clash</h1>
-<div class="sub">高階 AI 領地戰。自己的領地可通行，封閉區域會自動填色。</div>
+<div class="sub">高階 AI 領地戰。自己的領地可通行；封閉區域若沒有其他玩家在其中，才會自動填色。</div>
 
 <div class="settings">
 <div><label>場地大小</label><select id="size">
@@ -181,28 +181,51 @@ function recountScores(){
 function captureEnclosed(p){
   const seen=Array.from({length:n},()=>Array(n).fill(false));
   const comps=[];
+  const enemyHeads=new Set(
+    a.filter(q=>q.id!==p.id).map(q=>key(q.x,q.y))
+  );
+
   for(let sy=0;sy<n;sy++)for(let sx=0;sx<n;sx++){
     if(seen[sy][sx]||g[sy][sx]===p.id)continue;
     const cells=[],q=[[sx,sy]];
+    let containsEnemyPlayer=false;
     seen[sy][sx]=true;
+
     for(let qi=0;qi<q.length;qi++){
-      const [x,y]=q[qi];cells.push([x,y]);
+      const [x,y]=q[qi];
+      cells.push([x,y]);
+      if(enemyHeads.has(key(x,y)))containsEnemyPlayer=true;
+
       for(let d=0;d<4;d++){
         const nx=x+D[d][0],ny=y+D[d][1];
         if(!inside(nx,ny)||seen[ny][nx]||g[ny][nx]===p.id)continue;
-        seen[ny][nx]=true;q.push([nx,ny]);
+        seen[ny][nx]=true;
+        q.push([nx,ny]);
       }
     }
-    comps.push(cells);
+    comps.push({cells,containsEnemyPlayer});
   }
+
   if(comps.length<=1)return 0;
+
   let outside=0;
-  for(let i=1;i<comps.length;i++)if(comps[i].length>comps[outside].length)outside=i;
+  for(let i=1;i<comps.length;i++){
+    if(comps[i].cells.length>comps[outside].cells.length)outside=i;
+  }
+
   let changed=0;
   for(let i=0;i<comps.length;i++){
     if(i===outside)continue;
-    for(const [x,y] of comps[i]){
-      if(g[y][x]!==p.id){g[y][x]=p.id;changed++}
+
+    // If another player's current piece/head is inside this enclosed region,
+    // the region is protected and is not auto-filled.
+    if(comps[i].containsEnemyPlayer)continue;
+
+    for(const [x,y] of comps[i].cells){
+      if(g[y][x]!==p.id){
+        g[y][x]=p.id;
+        changed++;
+      }
     }
   }
   return changed;
