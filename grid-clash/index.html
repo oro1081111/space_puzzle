@@ -26,13 +26,16 @@ button.main{background:#292929;color:#fff}
 button:disabled{opacity:.42}
 .boardbox{position:relative;width:100%;aspect-ratio:1/1;background:#fbf7ef;border:1px solid #ddd4c7;border-radius:12px;overflow:hidden;touch-action:none}
 canvas{display:block;width:100%;height:100%}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}
-.stat{background:#fff;border:1px solid #ddd4c7;border-radius:10px;padding:8px;text-align:center}
-.stat b{display:block;font-size:18px}.stat small{font-size:11px;color:#777}
+.sharewrap{margin-top:10px}
+.sharebar{height:18px;width:100%;display:flex;overflow:hidden;border-radius:999px;background:#e7dfd4;border:1px solid #d4cabd}
+.shareseg{height:100%;transition:width .18s ease}
+.sharelegend{display:flex;flex-wrap:wrap;gap:7px 12px;margin-top:6px;font-size:11px;color:#6f685f}
+.shareitem{display:flex;align-items:center;gap:5px}
+.legenddot{width:9px;height:9px;border-radius:2px;display:inline-block}
 .list{margin-top:10px;display:grid;gap:6px}
-.row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:8px;align-items:center;background:#fff;border:1px solid #ddd4c7;border-radius:10px;padding:8px}
+.row{display:grid;grid-template-columns:12px minmax(0,1fr);gap:8px;align-items:center;background:#fff;border:1px solid #ddd4c7;border-radius:10px;padding:8px}
 .dot{width:12px;height:12px;border-radius:3px}
-.name{font-size:13px;font-weight:700}.meta{font-size:11px;color:#777}.pct{font-weight:800}
+.name{font-size:13px;font-weight:700}.meta{font-size:11px;color:#777}
 .strategy{margin-top:5px;padding:5px 7px;font-size:12px}
 .joysection{display:none;text-align:center;margin-top:12px}
 .joysection.show{display:block}
@@ -51,7 +54,6 @@ canvas{display:block;width:100%;height:100%}
 @media(max-width:520px){
  .wrap{padding:8px}.card{padding:10px;border-radius:14px}h1{font-size:28px}
  .settings{grid-template-columns:1fr 1fr}.buttons{grid-template-columns:1fr 1fr}.buttons button:first-child{grid-column:1/3}
- .stats{grid-template-columns:repeat(3,1fr)}
 }
 </style>
 </head>
@@ -88,14 +90,13 @@ canvas{display:block;width:100%;height:100%}
  <div id="overlay" class="overlay"><div class="win"><h2 id="winner">遊戲結束</h2><div id="result"></div><button id="again" class="main" style="margin-top:12px;width:100%">再來一局</button></div></div>
 </div>
 
-<div class="stats">
-<div class="stat"><b id="round">0</b><small>回合</small></div>
-<div class="stat"><b id="fill">0%</b><small>已佔領</small></div>
-<div class="stat"><b id="lead">—</b><small>目前領先</small></div>
+<div class="sharewrap">
+ <div id="sharebar" class="sharebar"></div>
+ <div id="sharelegend" class="sharelegend"></div>
 </div>
 
 <div id="joysection" class="joysection">
- <div class="joytitle">每次撥動搖桿 = 玩家與所有 AI 同步行動 1 步</div>
+ <div class="joytitle">持續推住搖桿即可連續移動；玩家每移動 1 格，所有 AI 同步移動 1 格</div>
  <div id="joy" class="joy"><div id="knob" class="knob"></div></div>
  <div id="joyhint" class="joyhint">將搖桿往任一方向撥動</div>
 </div>
@@ -104,7 +105,7 @@ canvas{display:block;width:100%;height:100%}
 <div class="note">
 AI 會先尋找可擴張的前線，再用路徑規劃穿越自己的領地前往目標；會評估圈地收益、空間、邊界、敵方壓力與重複路徑。
 為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
-玩家模式下沒有自動計時：只有玩家成功撥動一次搖桿，所有 AI 才會同步執行一回合。
+玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
 </div></div>
 
@@ -382,7 +383,7 @@ function init(){
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
   }
-  renderList();draw();stats();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='將搖桿往任一方向撥動';
+  renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='將搖桿往任一方向撥動';
 }
 
 function recordLoopState(){
@@ -484,9 +485,8 @@ function resolveTurn(hdir=null){
   }
 
   recordLoopState();
-  draw();stats();
+  draw();updateShare();
 
-  if(humanMode)$('#joyhint').textContent='完成第 '+turn+' 回合；再撥一次搖桿繼續';
 
   if(a.every(p=>!p.active)||occ>=n*n||turn>n*n*8)finish();
   return true;
@@ -512,20 +512,22 @@ function finish(){
 function renderList(){
   $('#list').innerHTML=a.map(p=>{
     const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+'>'+t+'</option>').join('');
-    return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家搖桿操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div><div class="pct">0%</div></div>';
+    return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家搖桿操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div></div>';
   }).join('');
 }
-function stats(){
-  $('#round').textContent=turn;
-  $('#fill').textContent=(occ/n/n*100).toFixed(1)+'%';
-  const s=[...a].sort((x,y)=>y.score-x.score);
-  $('#lead').textContent=s.length?name(s[0]):'—';
+function updateShare(){
+  const total=n*n;
+  $('#sharebar').innerHTML=a.map(p=>{
+    const pct=p.score/total*100;
+    return '<div class="shareseg" title="'+name(p)+' '+pct.toFixed(1)+'%" style="width:'+pct+'%;background:'+p.color+'"></div>';
+  }).join('');
+  $('#sharelegend').innerHTML=a.map(p=>{
+    const pct=p.score/total*100;
+    return '<span class="shareitem"><i class="legenddot" style="background:'+p.color+'"></i>'+name(p)+' '+pct.toFixed(1)+'%</span>';
+  }).join('');
   for(const p of a){
     const e=$('#r'+p.id);
-    if(e){
-      e.querySelector('.pct').textContent=(p.score/n/n*100).toFixed(1)+'%';
-      e.style.opacity=p.active||p.h?1:.5;
-    }
+    if(e)e.style.opacity=p.active||p.h?1:.5;
   }
 }
 function resize(){
@@ -564,7 +566,10 @@ $('#pause').onclick=()=>{
   run=!run;
   $('#pause').textContent=run?'暫停':'繼續';
   if(!humanMode){run?schedule():stop()}
-  else $('#joyhint').textContent=run?'已繼續，可撥動搖桿':'已暫停';
+  else{
+    if(!run){stopJoyRepeat();joyDir=null}
+    $('#joyhint').textContent=run?'已繼續，持續推住搖桿即可移動':'已暫停';
+  }
 };
 $('#step').onclick=()=>{if(ended||humanMode)return;run=true;stop();resolveTurn(null);run=false;$('#pause').textContent='繼續'};
 $('#speed').oninput=e=>{steps=+e.target.value;$('#speedValue').textContent=steps;if(run&&!humanMode)schedule()};
@@ -578,10 +583,23 @@ $('#list').onchange=e=>{
 };
 
 const joy=$('#joy'),knob=$('#knob');
-let dragging=false,fired=false,pid=null;
+let dragging=false,pid=null,joyDir=null,joyTimer=null,lastJoyStep=0;
+const JOY_REPEAT_MS=125;
+
+function stopJoyRepeat(){
+  if(joyTimer){clearInterval(joyTimer);joyTimer=null}
+}
+function tryJoyStep(){
+  if(!dragging||joyDir===null||!humanMode||!run||ended)return;
+  const now=performance.now();
+  if(now-lastJoyStep<JOY_REPEAT_MS-8)return;
+  const moved=resolveTurn(joyDir);
+  if(moved)lastJoyStep=now;
+}
 function resetJoy(){
-  dragging=false;fired=false;pid=null;
+  dragging=false;pid=null;joyDir=null;stopJoyRepeat();
   knob.style.transform='translate(-50%,-50%)';
+  if(humanMode&&!ended&&run)$('#joyhint').textContent='持續推住搖桿即可連續移動';
 }
 function joyMove(e){
   if(!dragging||e.pointerId!==pid)return;
@@ -590,17 +608,28 @@ function joyMove(e){
   const max=45,dist=Math.hypot(dx,dy);
   if(dist>max){dx=dx/dist*max;dy=dy/dist*max}
   knob.style.transform='translate(calc(-50% + '+dx+'px),calc(-50% + '+dy+'px))';
-  if(!fired&&dist>=30){
-    fired=true;
-    let d;
-    if(Math.abs(dx)>Math.abs(dy))d=dx>0?1:3;
-    else d=dy>0?2:0;
-    resolveTurn(d);
+
+  if(dist<22){
+    joyDir=null;
+    stopJoyRepeat();
+    return;
+  }
+
+  const d=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
+  if(joyDir!==d){
+    joyDir=d;
+    lastJoyStep=0;
+    stopJoyRepeat();
+    tryJoyStep();
+    joyTimer=setInterval(tryJoyStep,JOY_REPEAT_MS);
+  }else if(!joyTimer){
+    tryJoyStep();
+    joyTimer=setInterval(tryJoyStep,JOY_REPEAT_MS);
   }
 }
 joy.addEventListener('pointerdown',e=>{
   if(!humanMode||!run||ended)return;
-  dragging=true;fired=false;pid=e.pointerId;joy.setPointerCapture(e.pointerId);joyMove(e);
+  dragging=true;pid=e.pointerId;joy.setPointerCapture(e.pointerId);joyMove(e);
 });
 joy.addEventListener('pointermove',joyMove);
 joy.addEventListener('pointerup',resetJoy);
