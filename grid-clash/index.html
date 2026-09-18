@@ -100,7 +100,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="list" class="list"></div>
 <div class="note">
-目前只保留 30×30 自我對弈驗證後的三種強策略：APEX 全能預判、RAIDER 搶線壓制、FRONTIER 高速擴張。FORTRESS 因兩兩對戰明顯落後其餘三種，已移除。每台 AI 的選擇會保留。
+目前固定 30×30，三種 AI 已改為圈地強化版：APEX-X 圈地預判、RAIDER-X 封口搶線、FRONTIER-X 邊界包圍。AI 會把「完成封閉」視為遠高於普通單格擴張的收益，並主動利用棋盤邊界形成大區域。
 圈地判定會在每一步所有角色完成移動後，立即重新檢查所有玩家；即使只是其他玩家剛離開已封閉區域，也會立刻觸發填色。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
@@ -398,217 +398,50 @@ function pathToTarget(p,tx,ty){
   return null;
 }
 
+function enclosureGeometry(p,x,y){
+  let own=0,emptyN=0,enemyN=0;
+  for(let d=0;d<4;d++){
+    const nx=x+D[d][0],ny=y+D[d][1],v=cell(nx,ny);
+    if(v===p.id)own++;
+    else if(v===-1)emptyN++;
+    else if(v>=0)enemyN++;
+  }
+  const edge=nearEdge(x,y);
+  const edgeContact=edge===0?1:0;
+  const cornerContact=(x===0||x===n-1)&&(y===0||y===n-1)?1:0;
+  // Closing/bridging own trail is the key primitive for making loops.
+  const closePotential=Math.max(0,own-1);
+  return {own,emptyN,enemyN,edgeContact,cornerContact,closePotential};
+}
+
+function enemyHeadInLikelyPocket(p,x,y){
+  // Penalize attempts to close immediately around an enemy head because
+  // the real rule prevents auto-fill while another player remains inside.
+  let best=999;
+  for(const q of a)if(q.id!==p.id){
+    const d=Math.abs(q.x-x)+Math.abs(q.y-y);
+    if(d<best)best=d;
+  }
+  return best<=4?1:0;
+}
+
 function styleWeights(style){
-  // 30x30 enclosure-planner profiles selected from headless self-play.
-  if(style==='bastion')return {
-    cap:200,cap2:72,open:9,open2:6,enemy:8,edge:3.5,dist:2.25,
-    bridge:22,bridge2:12,revisit:24,block:120,race:14,contest:66,space:11,
-    uMinH:6,uMaxH:11,uMinW:4,uMaxW:11,rMin:4,rMax:7,
-    planArea:1.21046,planStep:.18175,planRisk:.912835,rectBias:.962409,
-    edgePlanBonus:3.91375,replan:4
+  // 30x30 enclosure-specialized profiles.
+  if(style==='raider')return {
+    cap:410,cap2:145,open:7,open2:5,enemy:13,edge:7,dist:2.7,
+    bridge:52,bridge2:24,revisit:28,block:135,race:24,contest:78,space:5,
+    close:105,edgeLoop:46,corner:20,pocketEnemy:62,future:1.15
   };
-  if(style==='sweep')return {
-    cap:188,cap2:66,open:14,open2:9,enemy:7,edge:2.2,dist:2.0,
-    bridge:16,bridge2:8,revisit:22,block:126,race:18,contest:68,space:15,
-    uMinH:6,uMaxH:10,uMinW:4,uMaxW:11,rMin:4,rMax:7,
-    planArea:1.41273,planStep:.193631,planRisk:1.01233,rectBias:.909529,
-    edgePlanBonus:6.70058,replan:3
+  if(style==='frontier')return {
+    cap:365,cap2:130,open:10,open2:7,enemy:7,edge:12,dist:2.2,
+    bridge:44,bridge2:22,revisit:27,block:132,race:19,contest:67,space:8,
+    close:94,edgeLoop:72,corner:28,pocketEnemy:55,future:1.25
   };
   return {
-    cap:195,cap2:70,open:11,open2:8,enemy:10,edge:3,dist:2.2,
-    bridge:19,bridge2:10,revisit:24,block:124,race:16,contest:72,space:13,
-    uMinH:6,uMaxH:11,uMinW:4,uMaxW:11,rMin:4,rMax:7,
-    planArea:1.3153,planStep:.181389,planRisk:1.08801,rectBias:1.03515,
-    edgePlanBonus:4.40099,replan:2
+    cap:440,cap2:160,open:8,open2:6,enemy:9,edge:9,dist:2.55,
+    bridge:58,bridge2:28,revisit:30,block:140,race:20,contest:76,space:6,
+    close:118,edgeLoop:58,corner:24,pocketEnemy:68,future:1.35
   };
-}
-
-
-function ownBfs(p){
-  const seen=new Set([key(p.x,p.y)]);
-  const q=[{x:p.x,y:p.y,dist:0,first:null}],out=[];
-  for(let qi=0;qi<q.length;qi++){
-    const cur=q[qi];out.push(cur);
-    for(let d=0;d<4;d++){
-      const nx=cur.x+D[d][0],ny=cur.y+D[d][1];
-      if(!inside(nx,ny)||g[ny][nx]!==p.id)continue;
-      const k=key(nx,ny);if(seen.has(k))continue;
-      seen.add(k);
-      q.push({x:nx,y:ny,dist:cur.dist+1,first:cur.first===null?d:cur.first});
-    }
-  }
-  return out;
-}
-
-function ownPathTo(p,tx,ty){
-  if(p.x===tx&&p.y===ty)return [];
-  const seen=new Set([key(p.x,p.y)]);
-  const q=[{x:p.x,y:p.y}],parent=new Map();
-
-  for(let qi=0;qi<q.length;qi++){
-    const cur=q[qi];
-    for(let d=0;d<4;d++){
-      const nx=cur.x+D[d][0],ny=cur.y+D[d][1],k=key(nx,ny);
-      if(!inside(nx,ny)||g[ny][nx]!==p.id||seen.has(k))continue;
-      seen.add(k);parent.set(k,[cur.x,cur.y]);
-      if(nx===tx&&ny===ty){
-        const path=[];let cx=tx,cy=ty;
-        while(cx!==p.x||cy!==p.y){
-          path.push([cx,cy]);
-          const pr=parent.get(key(cx,cy));
-          if(!pr)return [];
-          [cx,cy]=pr;
-        }
-        path.reverse();return path;
-      }
-      q.push({x:nx,y:ny});
-    }
-  }
-  return [];
-}
-
-function ownTouchesEdge(p){
-  for(let x=0;x<n;x++)if(g[0][x]===p.id||g[n-1][x]===p.id)return true;
-  for(let y=1;y<n-1;y++)if(g[y][0]===p.id||g[y][n-1]===p.id)return true;
-  return false;
-}
-
-function edgeSetupDirection(p){
-  const seen=new Set([key(p.x,p.y)]);
-  const q=[{x:p.x,y:p.y,first:null}];
-  for(let qi=0;qi<q.length;qi++){
-    const cur=q[qi];
-    if(nearEdge(cur.x,cur.y)===0&&cur.first!==null)return cur.first;
-    for(let d=0;d<4;d++){
-      const nx=cur.x+D[d][0],ny=cur.y+D[d][1];
-      if(!inside(nx,ny))continue;
-      const v=g[ny][nx],k=key(nx,ny);
-      if((v!==-1&&v!==p.id)||seen.has(k))continue;
-      seen.add(k);
-      q.push({x:nx,y:ny,first:cur.first===null?d:cur.first});
-    }
-  }
-  return null;
-}
-
-function planRisk(p,path){
-  let risk=0;
-  for(let i=0;i<path.length;i++){
-    const [x,y]=path[i],ed=nearestEnemyDist(p,x,y);
-    if(ed<=i+2)risk+=(i+3-ed);
-  }
-  return risk;
-}
-
-function buildEnclosurePlan(p){
-  const W=styleWeights(p.strategy);
-  const own=ownBfs(p);
-  let best=null,bestScore=-Infinity;
-
-  const edgeAnchors=own.filter(c=>nearEdge(c.x,c.y)===0).sort((a,b)=>a.dist-b.dist).slice(0,14);
-
-  const consider=(anchor,path,area,bias)=>{
-    if(!path.length)return;
-    let minx=anchor.x,maxx=anchor.x,miny=anchor.y,maxy=anchor.y;
-    for(const [x,y] of path){minx=Math.min(minx,x);maxx=Math.max(maxx,x);miny=Math.min(miny,y);maxy=Math.max(maxy,y)}
-    for(const q of a){
-      if(q.id===p.id)continue;
-      if(q.x>minx&&q.x<maxx&&q.y>miny&&q.y<maxy)return;
-    }
-    const score=
-      area*W.planArea -
-      (anchor.dist+path.length)*W.planStep -
-      planRisk(p,path)*W.planRisk +
-      bias;
-    if(score>bestScore){
-      const travel=ownPathTo(p,anchor.x,anchor.y);
-      bestScore=score;
-      best={coords:travel.concat(path),pos:0,blocked:0};
-    }
-  };
-
-  for(const an of edgeAnchors){
-    const modes=[];
-    if(an.y===0)modes.push([2,[1,3]]);
-    if(an.y===n-1)modes.push([0,[1,3]]);
-    if(an.x===0)modes.push([1,[0,2]]);
-    if(an.x===n-1)modes.push([3,[0,2]]);
-
-    for(const [inward,sides] of modes){
-      for(const side of sides){
-        for(let h=W.uMinH;h<=W.uMaxH;h++){
-          for(let w=W.uMinW;w<=W.uMaxW;w++){
-            const path=[];let x=an.x,y=an.y,ok=true;
-            for(const [d,len] of [[inward,h],[side,w],[(inward+2)%4,h]]){
-              for(let k=0;k<len;k++){
-                x+=D[d][0];y+=D[d][1];
-                if(!inside(x,y)||!empty(x,y)){ok=false;break}
-                path.push([x,y]);
-              }
-              if(!ok)break;
-            }
-            if(!ok||nearEdge(x,y)!==0)continue;
-
-            let minx=an.x,maxx=an.x,miny=an.y,maxy=an.y;
-            for(const [px,py] of path){minx=Math.min(minx,px);maxx=Math.max(maxx,px);miny=Math.min(miny,py);maxy=Math.max(maxy,py)}
-            const area=Math.max(0,(maxx-minx-1)*(maxy-miny-1));
-            consider(an,path,area,W.edgePlanBonus);
-          }
-        }
-      }
-    }
-  }
-
-  if(bestScore<8){
-    const frontierAnchors=own.filter(c=>{
-      for(let d=0;d<4;d++)if(empty(c.x+D[d][0],c.y+D[d][1]))return true;
-      return false;
-    }).sort((a,b)=>a.dist-b.dist).slice(0,8);
-
-    for(const an of frontierAnchors){
-      for(let d1=0;d1<4;d1++){
-        for(const turnDir of [1,3]){
-          const d2=(d1+turnDir)%4;
-          for(let l1=W.rMin;l1<=W.rMax;l1++){
-            for(let l2=W.rMin;l2<=W.rMax;l2++){
-              const path=[];let x=an.x,y=an.y,ok=true;
-              for(const [d,len] of [[d1,l1],[d2,l2],[(d1+2)%4,l1],[(d2+2)%4,l2-1]]){
-                for(let k=0;k<len;k++){
-                  x+=D[d][0];y+=D[d][1];
-                  if(!inside(x,y)||!empty(x,y)){ok=false;break}
-                  path.push([x,y]);
-                }
-                if(!ok)break;
-              }
-              if(!ok)continue;
-              const area=Math.max(0,(l1-1)*(l2-1));
-              consider(an,path,area*W.rectBias,0);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return best;
-}
-
-function followEnclosurePlan(p){
-  const plan=p.enclosurePlan;
-  if(!plan)return null;
-
-  while(plan.pos<plan.coords.length&&p.x===plan.coords[plan.pos][0]&&p.y===plan.coords[plan.pos][1])plan.pos++;
-  if(plan.pos>=plan.coords.length){p.enclosurePlan=null;return null}
-
-  const [tx,ty]=plan.coords[plan.pos];
-  if(!passable(p,tx,ty)){p.enclosurePlan=null;return null}
-
-  for(let d=0;d<4;d++){
-    if(p.x+D[d][0]===tx&&p.y+D[d][1]===ty)return d;
-  }
-
-  p.enclosurePlan=null;
-  return null;
 }
 
 function chooseNewTarget(p){
@@ -633,13 +466,20 @@ function chooseNewTarget(p){
     const nd=nearestEnemyDist(p,c.x,c.y);
     if(nd<=4)pressure+=(5-nd);
 
+    const geo=enclosureGeometry(p,c.x,c.y);
+    const pocketEnemy=enemyHeadInLikelyPocket(p,c.x,c.y);
+
     c.base=
       space*W.open +
       pressure*W.enemy +
       edgeBonus*W.edge +
       bridge*W.bridge +
+      geo.closePotential*W.close +
+      geo.edgeContact*W.edgeLoop +
+      geo.cornerContact*W.corner +
       Math.max(-3,Math.min(6,race))*W.race -
       contested*W.contest -
+      pocketEnemy*W.pocketEnemy -
       c.dist*W.dist -
       visit*W.revisit -
       block*W.block;
@@ -658,10 +498,16 @@ function chooseNewTarget(p){
     const future=localFutureValue(p,c.x,c.y,W);
     const regionRoom=emptyAdj(c.x,c.y)+Math.max(0,4-nearEdge(c.x,c.y))*.2;
 
+    // Captures are deliberately super-linear: completing a real enclosure
+    // should dominate ordinary one-cell expansion.
+    const captureValue=gain>1
+      ? Math.pow(gain-1,1.18)*W.cap
+      : 0;
+
     c.score=
       c.base +
-      Math.max(0,gain-1)*W.cap +
-      future +
+      captureValue +
+      future*W.future +
       regionRoom*W.space;
   }
 
@@ -710,11 +556,11 @@ function aiDirection(p){
       const nx=p.x+D[route.first][0],ny=p.y+D[route.first][1];
       const visits=p.visits.get(key(nx,ny))||0;
 
-      const fresh=p.commit.age<=Math.max(8,route.dist+5);
+      const fresh=p.commit.age<=Math.max(5,route.dist+3);
       const notLosingRace=race>=-1||route.dist<=2;
       const notLooping=visits<5||route.dist<=2;
 
-      if(fresh&&notLosingRace&&notLooping&&p.noGain<7)return route.first;
+      if(fresh&&notLosingRace&&notLooping&&p.noGain<5)return route.first;
     }
     p.commit=null;
   }
