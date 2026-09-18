@@ -428,13 +428,13 @@ function enemyHeadInLikelyPocket(p,x,y){
 function styleWeights(style){
   // 30x30 enclosure-trained profiles.
   // All three use the same long-horizon planner; weights only change tactical emphasis.
-  if(style==='raider')return {
+  if(style==='bastion')return {
     cap:233,open:9.5,enemy:17.5,edge:1.8,dist:1.75,bridge:17.5,
     revisit:31,block:148,race:27,contest:86,space:14,
     loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
     loopDepth:18,beam:44,minExtra:4
   };
-  if(style==='frontier')return {
+  if(style==='sweep')return {
     cap:233,open:13.5,enemy:14,edge:1.6,dist:1.6,bridge:17,
     revisit:31,block:147,race:25,contest:79,space:18,
     loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
@@ -695,89 +695,6 @@ function chooseNewTarget(p){
   return pick.first;
 }
 
-function chooseNewTarget(p){
-  let cands=frontierCandidates(p);
-  if(!cands.length)return null;
-
-  const W=styleWeights(p.strategy);
-  for(const c of cands){
-    const k=key(c.x,c.y);
-    const nextX=p.x+D[c.first][0],nextY=p.y+D[c.first][1];
-    const nextKey=key(nextX,nextY);
-    const visit=p.visits.get(nextKey)||0;
-    const block=p.blocked.get(k)||0;
-    const bridge=Math.max(0,ownAdj(p,c.x,c.y)-1);
-    const enemy=enemyAdj(p,c.x,c.y);
-    const edgeBonus=Math.max(0,5-nearEdge(c.x,c.y));
-    const race=opponentRaceMargin(p,c);
-    const space=emptyAdj(c.x,c.y);
-    const contested=race<=0?1:0;
-
-    let pressure=enemy*2;
-    const nd=nearestEnemyDist(p,c.x,c.y);
-    if(nd<=4)pressure+=(5-nd);
-
-    const geo=enclosureGeometry(p,c.x,c.y);
-    const pocketEnemy=enemyHeadInLikelyPocket(p,c.x,c.y);
-
-    c.base=
-      space*W.open +
-      pressure*W.enemy +
-      edgeBonus*W.edge +
-      bridge*W.bridge +
-      geo.closePotential*W.close +
-      geo.edgeContact*W.edgeLoop +
-      geo.cornerContact*W.corner +
-      Math.max(-3,Math.min(6,race))*W.race -
-      contested*W.contest -
-      pocketEnemy*W.pocketEnemy -
-      c.dist*W.dist -
-      visit*W.revisit -
-      block*W.block;
-
-    // Avoid walking back into a recent oscillation corridor.
-    if(p.recent.includes(nextKey))c.base-=W.revisit*1.8;
-    if(p.noGain>=6)c.base-=c.dist*1.7+visit*W.revisit;
-    if(p.panic>0||globalPanic>0)c.base-=visit*36+block*70+c.dist*.6;
-  }
-
-  cands.sort((u,v)=>v.base-u.base);
-  const top=cands.slice(0,Math.min(10,cands.length));
-
-  for(const c of top){
-    const gain=estimateCapture(p,c.x,c.y);
-    const future=localFutureValue(p,c.x,c.y,W);
-    const regionRoom=emptyAdj(c.x,c.y)+Math.max(0,4-nearEdge(c.x,c.y))*.2;
-
-    // Captures are deliberately super-linear: completing a real enclosure
-    // should dominate ordinary one-cell expansion.
-    const captureValue=gain>1
-      ? Math.pow(gain-1,1.18)*W.cap
-      : 0;
-
-    c.score=
-      c.base +
-      captureValue +
-      future*W.future +
-      regionRoom*W.space;
-  }
-
-  top.sort((u,v)=>v.score-u.score);
-
-  let pick=top[0];
-
-  // In escape mode deliberately choose among several strong alternatives
-  // instead of deterministically returning to the same trap.
-  if((p.panic>0||globalPanic>0)&&top.length>1){
-    const good=top.filter(c=>(p.blocked.get(key(c.x,c.y))||0)===0);
-    const pool=(good.length?good:top).slice(0,Math.min(3,(good.length?good:top).length));
-    pick=pool[Math.floor(Math.random()*pool.length)];
-  }
-
-  p.commit={x:pick.x,y:pick.y,age:0,score:pick.score};
-  return pick.first;
-}
-
 function aiDirection(p){
   if(p.loopPlan&&p.loopPos<p.loopPlan.length){
     const d=p.loopPlan[p.loopPos];
@@ -855,7 +772,7 @@ function init(){
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
       strategy:strategyPrefs[i]||STRATS[i%STRATS.length][0],color:COL[i],
-      commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map()
+      commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map(),loopPlan:[],loopPos:0,loopCooldown:0
     };
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
