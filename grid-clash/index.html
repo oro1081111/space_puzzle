@@ -103,7 +103,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="list" class="list"></div>
 <div class="note">
-預設 AI 為自我對弈訓練版；也可切換回上一版的全能、圈地、壓迫、擴張策略做比較。每台 AI 的選擇會保留，不會因重新開始或調整棋盤而跳回預設。
+舊策略已移除。現在四種 AI 都使用同一套高強度預判核心，只在戰術偏好上不同：APEX 全能預判、FORTRESS 高收益圈地、RAIDER 搶線壓制、FRONTIER 高速擴張。每台 AI 的選擇會保留。
 為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
@@ -115,15 +115,14 @@ const C=document.querySelector('#c'),X=C.getContext('2d');
 const COL=['#5577df','#33343a','#db665f','#3f9f6d','#d59a35','#8c61bd','#2d9dac','#d95e98'];
 const D=[[0,-1],[1,0],[0,1],[-1,0]];
 const STRATS=[
- ['selfplay','自我對弈 AI（訓練版）'],
- ['balanced','全能戰略'],
- ['enclose','圈地專家'],
- ['aggressive','壓迫型'],
- ['expand','擴張型']
+ ['apex','APEX｜全能預判'],
+ ['fortress','FORTRESS｜高收益圈地'],
+ ['raider','RAIDER｜搶線壓制'],
+ ['frontier','FRONTIER｜高速擴張']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
-let strategyPrefs=Array(8).fill('selfplay');
+let strategyPrefs=Array.from({length:8},(_,i)=>STRATS[i%STRATS.length][0]);
 
 const $=s=>document.querySelector(s);
 const inside=(x,y)=>x>=0&&y>=0&&x<n&&y<n;
@@ -236,30 +235,78 @@ function captureEnclosed(p){
 function estimateCapture(p,x,y){
   if(!empty(x,y))return 0;
   g[y][x]=p.id;
+
+  const enemyHeads=new Set(a.filter(q=>q.id!==p.id).map(q=>key(q.x,q.y)));
   const seen=Array.from({length:n},()=>Array(n).fill(false));
-  const sizes=[];
+  const comps=[];
+
   for(let sy=0;sy<n;sy++)for(let sx=0;sx<n;sx++){
     if(seen[sy][sx]||g[sy][sx]===p.id)continue;
-    let size=0,q=[[sx,sy]];seen[sy][sx]=true;
+    let size=0,hasEnemy=false,q=[[sx,sy]];
+    seen[sy][sx]=true;
+
     for(let qi=0;qi<q.length;qi++){
-      const [cx,cy]=q[qi];size++;
+      const [cx,cy]=q[qi];
+      size++;
+      if(enemyHeads.has(key(cx,cy)))hasEnemy=true;
+
       for(let d=0;d<4;d++){
         const nx=cx+D[d][0],ny=cy+D[d][1];
         if(!inside(nx,ny)||seen[ny][nx]||g[ny][nx]===p.id)continue;
-        seen[ny][nx]=true;q.push([nx,ny]);
+        seen[ny][nx]=true;
+        q.push([nx,ny]);
       }
     }
-    sizes.push(size);
+    comps.push({size,hasEnemy});
   }
+
   g[y][x]=-1;
-  if(sizes.length<=1)return 1;
-  let max=Math.max(...sizes),sum=1;
-  let skipped=false;
-  for(const s of sizes){
-    if(!skipped&&s===max){skipped=true;continue}
-    sum+=s;
+  if(comps.length<=1)return 1;
+
+  let outside=0;
+  for(let i=1;i<comps.length;i++){
+    if(comps[i].size>comps[outside].size)outside=i;
   }
-  return sum;
+
+  let gain=1;
+  for(let i=0;i<comps.length;i++){
+    if(i===outside||comps[i].hasEnemy)continue;
+    gain+=comps[i].size;
+  }
+  return gain;
+}
+
+function localFutureValue(p,x,y,W){
+  if(!empty(x,y))return 0;
+  g[y][x]=p.id;
+  const oldX=p.x,oldY=p.y;
+  p.x=x;p.y=y;
+
+  let best=0;
+  for(let d=0;d<4;d++){
+    const nx=x+D[d][0],ny=y+D[d][1];
+    if(!empty(nx,ny))continue;
+    const gain=estimateCapture(p,nx,ny);
+    const v=
+      Math.max(0,gain-1)*W.cap2 +
+      emptyAdj(nx,ny)*W.open2 +
+      Math.max(0,ownAdj(p,nx,ny)-1)*W.bridge2;
+    if(v>best)best=v;
+  }
+
+  p.x=oldX;p.y=oldY;
+  g[y][x]=-1;
+  return best;
+}
+
+function opponentRaceMargin(p,c){
+  let enemy=999;
+  for(const q of a){
+    if(q.id===p.id)continue;
+    const d=Math.abs(q.x-c.x)+Math.abs(q.y-c.y);
+    if(d<enemy)enemy=d;
+  }
+  return enemy-c.dist;
 }
 
 function frontierCandidates(p){
@@ -311,16 +358,24 @@ function pathToTarget(p,tx,ty){
 }
 
 function styleWeights(style){
-  // Self-play tuned coefficients. These were evolved against the previous
-  // generalist and then re-tested in 2-player and 3-player matches.
-  if(style==='selfplay')return {
-    cap:185.38,open:10.31,enemy:5.17,edge:1.88,dist:3.52,
-    bridge:6.97,novel:23.02,revisit:9.53,block:79.50
+  // All profiles use the same high-strength planner. The differences are
+  // strategic emphasis, not weaker legacy behavior.
+  if(style==='fortress')return {
+    cap:220,cap2:78,open:9,open2:6,enemy:4,edge:5.5,dist:2.8,
+    bridge:24,bridge2:12,revisit:18,block:92,race:8,contest:42,space:7
   };
-  if(style==='enclose')return {cap:92,open:3,enemy:2,edge:5,dist:1.15,bridge:14,novel:7,revisit:8,block:30};
-  if(style==='aggressive')return {cap:58,open:4,enemy:8,edge:2,dist:1.00,bridge:8,novel:8,revisit:8,block:30};
-  if(style==='expand')return {cap:50,open:11,enemy:1,edge:1,dist:.80,bridge:5,novel:10,revisit:10,block:28};
-  return {cap:70,open:7,enemy:4,edge:3,dist:.95,bridge:9,novel:9,revisit:9,block:22};
+  if(style==='raider')return {
+    cap:165,cap2:58,open:10,open2:7,enemy:13,edge:2.2,dist:2.5,
+    bridge:14,bridge2:8,revisit:20,block:110,race:20,contest:70,space:8
+  };
+  if(style==='frontier')return {
+    cap:155,cap2:52,open:17,open2:11,enemy:5,edge:1.4,dist:1.8,
+    bridge:12,bridge2:7,revisit:24,block:105,race:14,contest:54,space:14
+  };
+  return {
+    cap:195,cap2:70,open:12,open2:8,enemy:8,edge:3.2,dist:2.4,
+    bridge:18,bridge2:10,revisit:22,block:100,race:13,contest:58,space:10
+  };
 }
 
 function chooseNewTarget(p){
@@ -331,41 +386,65 @@ function chooseNewTarget(p){
   for(const c of cands){
     const k=key(c.x,c.y);
     const nextX=p.x+D[c.first][0],nextY=p.y+D[c.first][1];
-    const visit=p.visits.get(key(nextX,nextY))||0;
+    const nextKey=key(nextX,nextY);
+    const visit=p.visits.get(nextKey)||0;
     const block=p.blocked.get(k)||0;
     const bridge=Math.max(0,ownAdj(p,c.x,c.y)-1);
     const enemy=enemyAdj(p,c.x,c.y);
-    const edgeb=Math.max(0,5-nearEdge(c.x,c.y));
+    const edgeBonus=Math.max(0,5-nearEdge(c.x,c.y));
+    const race=opponentRaceMargin(p,c);
+    const space=emptyAdj(c.x,c.y);
+    const contested=race<=0?1:0;
+
+    let pressure=enemy*2;
     const nd=nearestEnemyDist(p,c.x,c.y);
-    let pressure=enemy*2+(nd<=3?(4-nd):0);
-    if(p.strategy==='aggressive')pressure*=1.8;
+    if(nd<=4)pressure+=(5-nd);
+
     c.base=
-      emptyAdj(c.x,c.y)*W.open +
+      space*W.open +
       pressure*W.enemy +
-      edgeb*W.edge +
-      bridge*W.bridge -
+      edgeBonus*W.edge +
+      bridge*W.bridge +
+      Math.max(-3,Math.min(6,race))*W.race -
+      contested*W.contest -
       c.dist*W.dist -
       visit*W.revisit -
-      block*W.block +
-      Math.random()*.2;
-    if(p.noGain>=7)c.base-=c.dist*1.4+visit*12;
-    if(p.panic>0||globalPanic>0)c.base-=visit*(W.novel+10)+block*(W.block+10)+c.dist*.4;
+      block*W.block;
+
+    // Avoid walking back into a recent oscillation corridor.
+    if(p.recent.includes(nextKey))c.base-=W.revisit*1.8;
+    if(p.noGain>=6)c.base-=c.dist*1.7+visit*W.revisit;
+    if(p.panic>0||globalPanic>0)c.base-=visit*36+block*70+c.dist*.6;
   }
 
   cands.sort((u,v)=>v.base-u.base);
-  const top=cands.slice(0,Math.min(8,cands.length));
+  const top=cands.slice(0,Math.min(10,cands.length));
+
   for(const c of top){
     const gain=estimateCapture(p,c.x,c.y);
-    c.score=c.base+Math.max(0,gain-1)*W.cap;
+    const future=localFutureValue(p,c.x,c.y,W);
+    const regionRoom=emptyAdj(c.x,c.y)+Math.max(0,4-nearEdge(c.x,c.y))*.2;
+
+    c.score=
+      c.base +
+      Math.max(0,gain-1)*W.cap +
+      future +
+      regionRoom*W.space;
   }
+
   top.sort((u,v)=>v.score-u.score);
 
   let pick=top[0];
+
+  // In escape mode deliberately choose among several strong alternatives
+  // instead of deterministically returning to the same trap.
   if((p.panic>0||globalPanic>0)&&top.length>1){
-    const alt=top.filter(c=>(p.blocked.get(key(c.x,c.y))||0)===0);
-    if(alt.length)pick=alt[Math.floor(Math.random()*Math.min(3,alt.length))];
+    const good=top.filter(c=>(p.blocked.get(key(c.x,c.y))||0)===0);
+    const pool=(good.length?good:top).slice(0,Math.min(3,(good.length?good:top).length));
+    pick=pool[Math.floor(Math.random()*pool.length)];
   }
-  p.commit={x:pick.x,y:pick.y,age:0};
+
+  p.commit={x:pick.x,y:pick.y,age:0,score:pick.score};
   return pick.first;
 }
 
@@ -373,10 +452,19 @@ function aiDirection(p){
   if(p.commit){
     p.commit.age++;
     const route=pathToTarget(p,p.commit.x,p.commit.y);
-    if(route&&p.commit.age<=Math.max(12,route.dist+8)&&p.noGain<10){
+
+    if(route){
+      const target={x:p.commit.x,y:p.commit.y,dist:route.dist};
+      const race=opponentRaceMargin(p,target);
       const nx=p.x+D[route.first][0],ny=p.y+D[route.first][1];
       const visits=p.visits.get(key(nx,ny))||0;
-      if(visits<7||route.dist<=2)return route.first;
+
+      // Keep a plan only while it still looks competitive.
+      const fresh=p.commit.age<=Math.max(8,route.dist+5);
+      const notLosingRace=race>=-1||route.dist<=2;
+      const notLooping=visits<5||route.dist<=2;
+
+      if(fresh&&notLosingRace&&notLooping&&p.noGain<7)return route.first;
     }
     p.commit=null;
   }
@@ -408,7 +496,7 @@ function init(){
     const dir=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
-      strategy:strategyPrefs[i]||'selfplay',color:COL[i],
+      strategy:strategyPrefs[i]||STRATS[i%STRATS.length][0],color:COL[i],
       commit:null,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map()
     };
     p.visits.set(key(x,y),1);
