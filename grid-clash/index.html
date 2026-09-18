@@ -63,10 +63,7 @@ canvas{display:block;width:100%;height:100%}
 <div class="sub">高階 AI 領地戰。自己的領地可通行；封閉區域若沒有其他玩家在其中，才會自動填色。</div>
 
 <div class="settings">
-<div><label>場地大小</label><select id="size">
-<option value="15">15 × 15</option><option value="20">20 × 20</option><option value="30" selected>30 × 30</option>
-<option value="40">40 × 40</option><option value="50">50 × 50</option><option value="60">60 × 60</option>
-</select></div>
+<div><label>場地大小</label><div style="padding:10px;border:1px solid #d8d0c4;border-radius:10px;background:#fff;font-weight:700">30 × 30（固定）</div></div>
 <div><label>參加數量</label><select id="count">
 <option>2</option><option selected>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option>
 </select></div>
@@ -103,7 +100,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="list" class="list"></div>
 <div class="note">
-舊策略已移除。現在四種 AI 都使用同一套高強度預判核心，只在戰術偏好上不同：APEX 全能預判、FORTRESS 高收益圈地、RAIDER 搶線壓制、FRONTIER 高速擴張。每台 AI 的選擇會保留。
+目前只保留 30×30 自我對弈驗證後的三種強策略：APEX 全能預判、RAIDER 搶線壓制、FRONTIER 高速擴張。FORTRESS 因兩兩對戰明顯落後其餘三種，已移除。每台 AI 的選擇會保留。
 為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
@@ -116,7 +113,6 @@ const COL=['#5577df','#33343a','#db665f','#3f9f6d','#d59a35','#8c61bd','#2d9dac'
 const D=[[0,-1],[1,0],[0,1],[-1,0]];
 const STRATS=[
  ['apex','APEX｜全能預判'],
- ['fortress','FORTRESS｜高收益圈地'],
  ['raider','RAIDER｜搶線壓制'],
  ['frontier','FRONTIER｜高速擴張']
 ];
@@ -358,23 +354,21 @@ function pathToTarget(p,tx,ty){
 }
 
 function styleWeights(style){
-  // All profiles use the same high-strength planner. The differences are
-  // strategic emphasis, not weaker legacy behavior.
-  if(style==='fortress')return {
-    cap:220,cap2:78,open:9,open2:6,enemy:4,edge:5.5,dist:2.8,
-    bridge:24,bridge2:12,revisit:18,block:92,race:8,contest:42,space:7
-  };
+  // 30x30 self-play tuned profiles.
+  // FORTRESS was removed after validation because it lost to all three survivors.
   if(style==='raider')return {
-    cap:165,cap2:58,open:10,open2:7,enemy:13,edge:2.2,dist:2.5,
-    bridge:14,bridge2:8,revisit:20,block:110,race:20,contest:70,space:8
+    cap:175,cap2:62,open:11,open2:7.5,enemy:14,edge:2.0,dist:2.35,
+    bridge:15,bridge2:8,revisit:22,block:115,race:22,contest:74,space:9
   };
   if(style==='frontier')return {
-    cap:155,cap2:52,open:17,open2:11,enemy:5,edge:1.4,dist:1.8,
-    bridge:12,bridge2:7,revisit:24,block:105,race:14,contest:54,space:14
+    cap:180.9628,cap2:68.5289,open:13.4618,open2:9.7495,enemy:10.9285,
+    edge:1.7897,dist:2.1095,bridge:14.8811,bridge2:7.6802,revisit:20.5132,
+    block:134.5472,race:23.9696,contest:65.5207,space:12.5883
   };
   return {
-    cap:195,cap2:70,open:12,open2:8,enemy:8,edge:3.2,dist:2.4,
-    bridge:18,bridge2:10,revisit:22,block:100,race:13,contest:58,space:10
+    cap:181.1307,cap2:60.9336,open:7.6732,open2:5.7305,enemy:16.3792,
+    edge:1.4358,dist:2.4583,bridge:15.8085,bridge2:6.3525,revisit:26.6244,
+    block:129.2573,race:16.5611,contest:82.5762,space:17.0433
   };
 }
 
@@ -485,7 +479,7 @@ function place(x,y){
 function init(){
   stop();run=false;ended=false;turn=0;occ=0;stateSeen=new Map();globalPanic=0;
   $('#overlay').classList.remove('show');
-  n=+$('#size').value;const k=+$('#count').value;humanMode=$('#human').checked;
+  n=30;const k=+$('#count').value;humanMode=$('#human').checked;
   g=Array.from({length:n},()=>Array(n).fill(-1));a=[];
   const cx=(n-1)/2,cy=(n-1)/2,R=n*.36;
   for(let i=0;i<k;i++){
@@ -692,7 +686,6 @@ $('#pause').onclick=()=>{
 };
 $('#step').onclick=()=>{if(ended||humanMode)return;run=true;stop();resolveTurn(null);run=false;$('#pause').textContent='繼續'};
 $('#speed').oninput=e=>{steps=+e.target.value;$('#speedValue').textContent=steps;if(run&&!humanMode)schedule()};
-$('#size').onchange=init;
 $('#count').onchange=init;
 $('#human').onchange=init;
 $('#list').onchange=e=>{
