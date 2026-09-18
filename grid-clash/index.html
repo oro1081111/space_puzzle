@@ -103,7 +103,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="list" class="list"></div>
 <div class="note">
-AI 會先尋找可擴張的前線，再用路徑規劃穿越自己的領地前往目標；會評估圈地收益、空間、邊界、敵方壓力與重複路徑。
+預設 AI 改為自我對弈訓練版：會搜尋可擴張前線、規劃穿越自己的領地，並評估圈地收益、空間、邊界、敵方壓力、碰撞成本與重複路徑。
 為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
@@ -115,6 +115,7 @@ const C=document.querySelector('#c'),X=C.getContext('2d');
 const COL=['#5577df','#33343a','#db665f','#3f9f6d','#d59a35','#8c61bd','#2d9dac','#d95e98'];
 const D=[[0,-1],[1,0],[0,1],[-1,0]];
 const STRATS=[
+ ['selfplay','自我對弈 AI（訓練版）'],
  ['balanced','全能戰略'],
  ['enclose','圈地專家'],
  ['aggressive','壓迫型'],
@@ -309,10 +310,16 @@ function pathToTarget(p,tx,ty){
 }
 
 function styleWeights(style){
-  if(style==='enclose')return {cap:92,open:3,enemy:2,edge:5,dist:1.15,bridge:14,novel:7};
-  if(style==='aggressive')return {cap:58,open:4,enemy:8,edge:2,dist:1.00,bridge:8,novel:8};
-  if(style==='expand')return {cap:50,open:11,enemy:1,edge:1,dist:.80,bridge:5,novel:10};
-  return {cap:70,open:7,enemy:4,edge:3,dist:.95,bridge:9,novel:9};
+  // Self-play tuned coefficients. These were evolved against the previous
+  // generalist and then re-tested in 2-player and 3-player matches.
+  if(style==='selfplay')return {
+    cap:185.38,open:10.31,enemy:5.17,edge:1.88,dist:3.52,
+    bridge:6.97,novel:23.02,revisit:9.53,block:79.50
+  };
+  if(style==='enclose')return {cap:92,open:3,enemy:2,edge:5,dist:1.15,bridge:14,novel:7,revisit:8,block:30};
+  if(style==='aggressive')return {cap:58,open:4,enemy:8,edge:2,dist:1.00,bridge:8,novel:8,revisit:8,block:30};
+  if(style==='expand')return {cap:50,open:11,enemy:1,edge:1,dist:.80,bridge:5,novel:10,revisit:10,block:28};
+  return {cap:70,open:7,enemy:4,edge:3,dist:.95,bridge:9,novel:9,revisit:9,block:22};
 }
 
 function chooseNewTarget(p){
@@ -337,11 +344,11 @@ function chooseNewTarget(p){
       edgeb*W.edge +
       bridge*W.bridge -
       c.dist*W.dist -
-      visit*W.novel -
-      block*22 +
+      visit*W.revisit -
+      block*W.block +
       Math.random()*.2;
     if(p.noGain>=7)c.base-=c.dist*1.4+visit*12;
-    if(p.panic>0||globalPanic>0)c.base-=visit*25+block*35+c.dist*.4;
+    if(p.panic>0||globalPanic>0)c.base-=visit*(W.novel+10)+block*(W.block+10)+c.dist*.4;
   }
 
   cands.sort((u,v)=>v.base-u.base);
@@ -400,7 +407,7 @@ function init(){
     const dir=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
-      strategy:STRATS[Math.max(0,i-(humanMode?1:0))%STRATS.length][0],color:COL[i],
+      strategy:'selfplay',color:COL[i],
       commit:null,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map()
     };
     p.visits.set(key(x,y),1);
