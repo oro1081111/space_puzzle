@@ -101,7 +101,7 @@ canvas{display:block;width:100%;height:100%}
 <div id="list" class="list"></div>
 <div class="note">
 目前只保留 30×30 自我對弈驗證後的三種強策略：APEX 全能預判、RAIDER 搶線壓制、FRONTIER 高速擴張。FORTRESS 因兩兩對戰明顯落後其餘三種，已移除。每台 AI 的選擇會保留。
-為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
+圈地判定會在每一步所有角色完成移動後，立即重新檢查所有玩家；即使只是其他玩家剛離開已封閉區域，也會立刻觸發填色。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
 </div></div>
@@ -175,7 +175,7 @@ function recountScores(){
   occ=total;
 }
 
-function captureEnclosed(p){
+function enclosedCellsFor(p){
   const seen=Array.from({length:n},()=>Array(n).fill(false));
   const comps=[];
   const enemyHeads=new Set(
@@ -184,6 +184,7 @@ function captureEnclosed(p){
 
   for(let sy=0;sy<n;sy++)for(let sx=0;sx<n;sx++){
     if(seen[sy][sx]||g[sy][sx]===p.id)continue;
+
     const cells=[],q=[[sx,sy]];
     let containsEnemyPlayer=false;
     seen[sy][sx]=true;
@@ -191,6 +192,7 @@ function captureEnclosed(p){
     for(let qi=0;qi<q.length;qi++){
       const [x,y]=q[qi];
       cells.push([x,y]);
+
       if(enemyHeads.has(key(x,y)))containsEnemyPlayer=true;
 
       for(let d=0;d<4;d++){
@@ -200,32 +202,75 @@ function captureEnclosed(p){
         q.push([nx,ny]);
       }
     }
+
     comps.push({cells,containsEnemyPlayer});
   }
 
-  if(comps.length<=1)return 0;
+  if(comps.length<=1)return [];
 
+  // With board edges counting as enclosure walls, the largest component is
+  // treated as the outside. Every smaller component is an enclosed region.
   let outside=0;
   for(let i=1;i<comps.length;i++){
     if(comps[i].cells.length>comps[outside].cells.length)outside=i;
   }
 
-  let changed=0;
+  const captured=[];
   for(let i=0;i<comps.length;i++){
     if(i===outside)continue;
-
-    // If another player's current piece/head is inside this enclosed region,
-    // the region is protected and is not auto-filled.
     if(comps[i].containsEnemyPlayer)continue;
+    for(const pos of comps[i].cells)captured.push(pos);
+  }
+  return captured;
+}
 
-    for(const [x,y] of comps[i].cells){
-      if(g[y][x]!==p.id){
-        g[y][x]=p.id;
+function resolveAllCaptures(){
+  // Re-check every player after every movement, not only the player who just
+  // painted a new square. This makes capture happen immediately when an enemy
+  // leaves an already-enclosed region.
+  //
+  // Resolve claims simultaneously per pass so player iteration order does not
+  // decide overlapping captures. Repeat until stable because one fill can
+  // create another valid enclosure.
+  let totalChanged=0;
+  const maxPasses=Math.max(4,a.length+2);
+
+  for(let pass=0;pass<maxPasses;pass++){
+    const claims=new Map();
+
+    for(const p of a){
+      const cells=enclosedCellsFor(p);
+      for(const [x,y] of cells){
+        if(g[y][x]===p.id)continue;
+        const k=key(x,y);
+        if(!claims.has(k))claims.set(k,[]);
+        claims.get(k).push(p.id);
+      }
+    }
+
+    let changed=0;
+
+    for(const [k,owners] of claims){
+      // If two players would fill the same square on the same pass, keep the
+      // square unchanged and let later movement resolve the conflict.
+      const unique=[...new Set(owners)];
+      if(unique.length!==1)continue;
+
+      const [x,y]=k.split(',').map(Number);
+      const id=unique[0];
+
+      if(g[y][x]!==id){
+        g[y][x]=id;
         changed++;
       }
     }
+
+    totalChanged+=changed;
+    if(changed===0)break;
   }
-  return changed;
+
+  if(totalChanged>0)recountScores();
+  return totalChanged;
 }
 
 function estimateCapture(p,x,y){
@@ -579,8 +624,10 @@ function resolveTurn(hdir=null){
     }
   }
 
-  for(const id of claimed)captureEnclosed(a[id]);
-  recountScores();
+  // Always evaluate enclosure after all pieces have moved. This also catches
+  // regions that become capturable because an opponent just left them.
+  const captureChanged=resolveAllCaptures();
+  if(captureChanged===0)recountScores();
 
   for(const p of a){
     if(p.score>before[p.id]){
