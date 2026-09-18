@@ -112,9 +112,9 @@ const C=document.querySelector('#c'),X=C.getContext('2d');
 const COL=['#5577df','#33343a','#db665f','#3f9f6d','#d59a35','#8c61bd','#2d9dac','#d95e98'];
 const D=[[0,-1],[1,0],[0,1],[-1,0]];
 const STRATS=[
- ['apex','APEX｜全能預判'],
- ['raider','RAIDER｜搶線壓制'],
- ['frontier','FRONTIER｜高速擴張']
+ ['apex','APEX｜均衡圈地'],
+ ['bastion','BASTION｜穩健封鎖'],
+ ['sweep','SWEEP｜大區掃蕩']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
@@ -399,22 +399,216 @@ function pathToTarget(p,tx,ty){
 }
 
 function styleWeights(style){
-  // 30x30 self-play tuned profiles.
-  // FORTRESS was removed after validation because it lost to all three survivors.
-  if(style==='raider')return {
-    cap:175,cap2:62,open:11,open2:7.5,enemy:14,edge:2.0,dist:2.35,
-    bridge:15,bridge2:8,revisit:22,block:115,race:22,contest:74,space:9
+  // 30x30 enclosure-planner profiles selected from headless self-play.
+  if(style==='bastion')return {
+    cap:200,cap2:72,open:9,open2:6,enemy:8,edge:3.5,dist:2.25,
+    bridge:22,bridge2:12,revisit:24,block:120,race:14,contest:66,space:11,
+    uMinH:6,uMaxH:11,uMinW:4,uMaxW:11,rMin:4,rMax:7,
+    planArea:1.21046,planStep:.18175,planRisk:.912835,rectBias:.962409,
+    edgePlanBonus:3.91375,replan:4
   };
-  if(style==='frontier')return {
-    cap:180.9628,cap2:68.5289,open:13.4618,open2:9.7495,enemy:10.9285,
-    edge:1.7897,dist:2.1095,bridge:14.8811,bridge2:7.6802,revisit:20.5132,
-    block:134.5472,race:23.9696,contest:65.5207,space:12.5883
+  if(style==='sweep')return {
+    cap:188,cap2:66,open:14,open2:9,enemy:7,edge:2.2,dist:2.0,
+    bridge:16,bridge2:8,revisit:22,block:126,race:18,contest:68,space:15,
+    uMinH:6,uMaxH:10,uMinW:4,uMaxW:11,rMin:4,rMax:7,
+    planArea:1.41273,planStep:.193631,planRisk:1.01233,rectBias:.909529,
+    edgePlanBonus:6.70058,replan:3
   };
   return {
-    cap:181.1307,cap2:60.9336,open:7.6732,open2:5.7305,enemy:16.3792,
-    edge:1.4358,dist:2.4583,bridge:15.8085,bridge2:6.3525,revisit:26.6244,
-    block:129.2573,race:16.5611,contest:82.5762,space:17.0433
+    cap:195,cap2:70,open:11,open2:8,enemy:10,edge:3,dist:2.2,
+    bridge:19,bridge2:10,revisit:24,block:124,race:16,contest:72,space:13,
+    uMinH:6,uMaxH:11,uMinW:4,uMaxW:11,rMin:4,rMax:7,
+    planArea:1.3153,planStep:.181389,planRisk:1.08801,rectBias:1.03515,
+    edgePlanBonus:4.40099,replan:2
   };
+}
+
+
+function ownBfs(p){
+  const seen=new Set([key(p.x,p.y)]);
+  const q=[{x:p.x,y:p.y,dist:0,first:null}],out=[];
+  for(let qi=0;qi<q.length;qi++){
+    const cur=q[qi];out.push(cur);
+    for(let d=0;d<4;d++){
+      const nx=cur.x+D[d][0],ny=cur.y+D[d][1];
+      if(!inside(nx,ny)||g[ny][nx]!==p.id)continue;
+      const k=key(nx,ny);if(seen.has(k))continue;
+      seen.add(k);
+      q.push({x:nx,y:ny,dist:cur.dist+1,first:cur.first===null?d:cur.first});
+    }
+  }
+  return out;
+}
+
+function ownPathTo(p,tx,ty){
+  if(p.x===tx&&p.y===ty)return [];
+  const seen=new Set([key(p.x,p.y)]);
+  const q=[{x:p.x,y:p.y}],parent=new Map();
+
+  for(let qi=0;qi<q.length;qi++){
+    const cur=q[qi];
+    for(let d=0;d<4;d++){
+      const nx=cur.x+D[d][0],ny=cur.y+D[d][1],k=key(nx,ny);
+      if(!inside(nx,ny)||g[ny][nx]!==p.id||seen.has(k))continue;
+      seen.add(k);parent.set(k,[cur.x,cur.y]);
+      if(nx===tx&&ny===ty){
+        const path=[];let cx=tx,cy=ty;
+        while(cx!==p.x||cy!==p.y){
+          path.push([cx,cy]);
+          const pr=parent.get(key(cx,cy));
+          if(!pr)return [];
+          [cx,cy]=pr;
+        }
+        path.reverse();return path;
+      }
+      q.push({x:nx,y:ny});
+    }
+  }
+  return [];
+}
+
+function ownTouchesEdge(p){
+  for(let x=0;x<n;x++)if(g[0][x]===p.id||g[n-1][x]===p.id)return true;
+  for(let y=1;y<n-1;y++)if(g[y][0]===p.id||g[y][n-1]===p.id)return true;
+  return false;
+}
+
+function edgeSetupDirection(p){
+  const seen=new Set([key(p.x,p.y)]);
+  const q=[{x:p.x,y:p.y,first:null}];
+  for(let qi=0;qi<q.length;qi++){
+    const cur=q[qi];
+    if(nearEdge(cur.x,cur.y)===0&&cur.first!==null)return cur.first;
+    for(let d=0;d<4;d++){
+      const nx=cur.x+D[d][0],ny=cur.y+D[d][1];
+      if(!inside(nx,ny))continue;
+      const v=g[ny][nx],k=key(nx,ny);
+      if((v!==-1&&v!==p.id)||seen.has(k))continue;
+      seen.add(k);
+      q.push({x:nx,y:ny,first:cur.first===null?d:cur.first});
+    }
+  }
+  return null;
+}
+
+function planRisk(p,path){
+  let risk=0;
+  for(let i=0;i<path.length;i++){
+    const [x,y]=path[i],ed=nearestEnemyDist(p,x,y);
+    if(ed<=i+2)risk+=(i+3-ed);
+  }
+  return risk;
+}
+
+function buildEnclosurePlan(p){
+  const W=styleWeights(p.strategy);
+  const own=ownBfs(p);
+  let best=null,bestScore=-Infinity;
+
+  const edgeAnchors=own.filter(c=>nearEdge(c.x,c.y)===0).sort((a,b)=>a.dist-b.dist).slice(0,14);
+
+  const consider=(anchor,path,area,bias)=>{
+    if(!path.length)return;
+    let minx=anchor.x,maxx=anchor.x,miny=anchor.y,maxy=anchor.y;
+    for(const [x,y] of path){minx=Math.min(minx,x);maxx=Math.max(maxx,x);miny=Math.min(miny,y);maxy=Math.max(maxy,y)}
+    for(const q of a){
+      if(q.id===p.id)continue;
+      if(q.x>minx&&q.x<maxx&&q.y>miny&&q.y<maxy)return;
+    }
+    const score=
+      area*W.planArea -
+      (anchor.dist+path.length)*W.planStep -
+      planRisk(p,path)*W.planRisk +
+      bias;
+    if(score>bestScore){
+      const travel=ownPathTo(p,anchor.x,anchor.y);
+      bestScore=score;
+      best={coords:travel.concat(path),pos:0,blocked:0};
+    }
+  };
+
+  for(const an of edgeAnchors){
+    const modes=[];
+    if(an.y===0)modes.push([2,[1,3]]);
+    if(an.y===n-1)modes.push([0,[1,3]]);
+    if(an.x===0)modes.push([1,[0,2]]);
+    if(an.x===n-1)modes.push([3,[0,2]]);
+
+    for(const [inward,sides] of modes){
+      for(const side of sides){
+        for(let h=W.uMinH;h<=W.uMaxH;h++){
+          for(let w=W.uMinW;w<=W.uMaxW;w++){
+            const path=[];let x=an.x,y=an.y,ok=true;
+            for(const [d,len] of [[inward,h],[side,w],[(inward+2)%4,h]]){
+              for(let k=0;k<len;k++){
+                x+=D[d][0];y+=D[d][1];
+                if(!inside(x,y)||!empty(x,y)){ok=false;break}
+                path.push([x,y]);
+              }
+              if(!ok)break;
+            }
+            if(!ok||nearEdge(x,y)!==0)continue;
+
+            let minx=an.x,maxx=an.x,miny=an.y,maxy=an.y;
+            for(const [px,py] of path){minx=Math.min(minx,px);maxx=Math.max(maxx,px);miny=Math.min(miny,py);maxy=Math.max(maxy,py)}
+            const area=Math.max(0,(maxx-minx-1)*(maxy-miny-1));
+            consider(an,path,area,W.edgePlanBonus);
+          }
+        }
+      }
+    }
+  }
+
+  if(bestScore<8){
+    const frontierAnchors=own.filter(c=>{
+      for(let d=0;d<4;d++)if(empty(c.x+D[d][0],c.y+D[d][1]))return true;
+      return false;
+    }).sort((a,b)=>a.dist-b.dist).slice(0,8);
+
+    for(const an of frontierAnchors){
+      for(let d1=0;d1<4;d1++){
+        for(const turnDir of [1,3]){
+          const d2=(d1+turnDir)%4;
+          for(let l1=W.rMin;l1<=W.rMax;l1++){
+            for(let l2=W.rMin;l2<=W.rMax;l2++){
+              const path=[];let x=an.x,y=an.y,ok=true;
+              for(const [d,len] of [[d1,l1],[d2,l2],[(d1+2)%4,l1],[(d2+2)%4,l2-1]]){
+                for(let k=0;k<len;k++){
+                  x+=D[d][0];y+=D[d][1];
+                  if(!inside(x,y)||!empty(x,y)){ok=false;break}
+                  path.push([x,y]);
+                }
+                if(!ok)break;
+              }
+              if(!ok)continue;
+              const area=Math.max(0,(l1-1)*(l2-1));
+              consider(an,path,area*W.rectBias,0);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function followEnclosurePlan(p){
+  const plan=p.enclosurePlan;
+  if(!plan)return null;
+
+  while(plan.pos<plan.coords.length&&p.x===plan.coords[plan.pos][0]&&p.y===plan.coords[plan.pos][1])plan.pos++;
+  if(plan.pos>=plan.coords.length){p.enclosurePlan=null;return null}
+
+  const [tx,ty]=plan.coords[plan.pos];
+  if(!passable(p,tx,ty)){p.enclosurePlan=null;return null}
+
+  for(let d=0;d<4;d++){
+    if(p.x+D[d][0]===tx&&p.y+D[d][1]===ty)return d;
+  }
+
+  p.enclosurePlan=null;
+  return null;
 }
 
 function chooseNewTarget(p){
@@ -488,6 +682,24 @@ function chooseNewTarget(p){
 }
 
 function aiDirection(p){
+  let d=followEnclosurePlan(p);
+  if(d!==null)return d;
+
+  if(!ownTouchesEdge(p)){
+    d=edgeSetupDirection(p);
+    if(d!==null)return d;
+  }
+
+  const W=styleWeights(p.strategy);
+  if(p.noGain>=W.replan||turn<12||Math.random()<.12){
+    const plan=buildEnclosurePlan(p);
+    if(plan){
+      p.enclosurePlan=plan;
+      d=followEnclosurePlan(p);
+      if(d!==null)return d;
+    }
+  }
+
   if(p.commit){
     p.commit.age++;
     const route=pathToTarget(p,p.commit.x,p.commit.y);
@@ -498,7 +710,6 @@ function aiDirection(p){
       const nx=p.x+D[route.first][0],ny=p.y+D[route.first][1];
       const visits=p.visits.get(key(nx,ny))||0;
 
-      // Keep a plan only while it still looks competitive.
       const fresh=p.commit.age<=Math.max(8,route.dist+5);
       const notLosingRace=race>=-1||route.dist<=2;
       const notLooping=visits<5||route.dist<=2;
@@ -509,7 +720,6 @@ function aiDirection(p){
   }
   return chooseNewTarget(p);
 }
-
 function canExpand(p){return frontierCandidates(p).length>0}
 
 function place(x,y){
@@ -536,7 +746,7 @@ function init(){
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
       strategy:strategyPrefs[i]||STRATS[i%STRATS.length][0],color:COL[i],
-      commit:null,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map()
+      commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map()
     };
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
@@ -551,7 +761,7 @@ function recordLoopState(){
   if(count>=3){
     globalPanic=5;
     for(const p of a)if(!p.h){
-      p.commit=null;p.panic=5;
+      p.commit=null;p.enclosurePlan=null;p.planBlocked=0;p.panic=5;
     }
   }else if(globalPanic>0){
     globalPanic--;
@@ -604,13 +814,17 @@ function resolveTurn(hdir=null){
         if(z.newCell){
           z.p.blocked.set(dest,(z.p.blocked.get(dest)||0)+1);
           if(z.p.commit&&key(z.p.commit.x,z.p.commit.y)===dest)z.p.commit=null;
+          if(z.p.enclosurePlan){
+            z.p.planBlocked++;
+            if(z.p.planBlocked>=2){z.p.enclosurePlan=null;z.p.planBlocked=0}
+          }
         }
       }
       continue;
     }
     const z=arr[0],p=z.p;
     if(!passable(p,z.x,z.y))continue;
-    p.x=z.x;p.y=z.y;p.dir=z.d;p.last=z.d;
+    p.x=z.x;p.y=z.y;p.dir=z.d;p.last=z.d;p.planBlocked=0;
 
     const posKey=key(p.x,p.y);
     p.visits.set(posKey,(p.visits.get(posKey)||0)+1);
@@ -637,6 +851,8 @@ function resolveTurn(hdir=null){
       p.noGain++;
       if(!p.h&&p.noGain>=8){
         p.commit=null;
+        p.enclosurePlan=null;
+        p.planBlocked=0;
         p.panic=Math.max(p.panic,4);
       }
     }
@@ -742,6 +958,8 @@ $('#list').onchange=e=>{
     p.strategy=s.value;
     strategyPrefs[p.id]=s.value;
     p.commit=null;
+    p.enclosurePlan=null;
+    p.planBlocked=0;
     p.panic=2;
   }
 };
