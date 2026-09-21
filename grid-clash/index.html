@@ -40,11 +40,6 @@ canvas{display:block;width:100%;height:100%}
 .joysection{display:none;text-align:center;margin-top:12px}
 .joysection.show{display:block}
 .joytitle{font-size:12px;color:#6f685f;margin-bottom:6px}
-.joy{width:158px;height:158px;margin:auto;border-radius:50%;background:#e8e0d4;border:2px solid #cbc0b1;position:relative;touch-action:none;box-shadow:inset 0 4px 14px #00000012}
-.joy:before,.joy:after{content:"";position:absolute;background:#c8bdaf55}
-.joy:before{width:1px;height:86%;left:50%;top:7%}
-.joy:after{height:1px;width:86%;top:50%;left:7%}
-.knob{position:absolute;width:62px;height:62px;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:50%;background:#303033;box-shadow:0 5px 13px #0003;z-index:2}
 .joyhint{font-size:11px;color:#80786e;margin-top:6px;min-height:16px}
 .note{font-size:11px;color:#746e65;line-height:1.58;margin-top:10px}
 .overlay{display:none;position:absolute;inset:0;background:#fffaf0dd;align-items:center;justify-content:center;text-align:center;padding:20px}
@@ -93,16 +88,15 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="joysection" class="joysection">
- <div class="joytitle">持續推住搖桿即可連續移動；玩家每移動 1 格，所有 AI 同步移動 1 格</div>
- <div id="joy" class="joy"><div id="knob" class="knob"></div></div>
- <div id="joyhint" class="joyhint">將搖桿往任一方向撥動</div>
+ <div class="joytitle">玩家模式：點擊棋盤的上／下／左／右側，即可往對應方向移動 1 格；每次玩家行動，所有 AI 同步移動 1 格。</div>
+ <div id="joyhint" class="joyhint">點擊棋盤四側來移動</div>
 </div>
 
 <div id="list" class="list"></div>
 <div class="note">
 目前固定 30×30，三種 AI 已改為圈地強化版：APEX-X 圈地預判、RAIDER-X 封口搶線、FRONTIER-X 邊界包圍。AI 會把「完成封閉」視為遠高於普通單格擴張的收益，並主動利用棋盤邊界形成大區域。
 圈地判定會在每一步所有角色完成移動後，立即重新檢查所有玩家；即使只是其他玩家剛離開已封閉區域，也會立刻觸發填色。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
-玩家模式下沒有獨立的 AI 計時：搖桿推住時會連續移動，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
+玩家模式下沒有獨立的 AI 計時：點擊棋盤上／下／左／右側即可移動 1 格，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
 </div></div>
 
@@ -777,7 +771,7 @@ function init(){
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
   }
-  renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='將搖桿往任一方向撥動';
+  renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊棋盤四側來移動';
 }
 
 function recordLoopState(){
@@ -902,7 +896,7 @@ function resolveTurn(hdir=null){
 function start(){
   init();run=true;
   if(!humanMode)schedule();
-  else $('#joyhint').textContent='將搖桿往任一方向撥動';
+  else $('#joyhint').textContent='點擊棋盤四側來移動';
 }
 function stop(){if(timer){clearInterval(timer);timer=null}}
 function schedule(){
@@ -974,8 +968,7 @@ $('#pause').onclick=()=>{
   $('#pause').textContent=run?'暫停':'繼續';
   if(!humanMode){run?schedule():stop()}
   else{
-    if(!run){stopJoyRepeat();joyDir=null}
-    $('#joyhint').textContent=run?'已繼續，持續推住搖桿即可移動':'已暫停';
+    $('#joyhint').textContent=run?'已繼續，點擊棋盤四側即可移動':'已暫停';
   }
 };
 $('#step').onclick=()=>{if(ended||humanMode)return;run=true;stop();resolveTurn(null);run=false;$('#pause').textContent='繼續'};
@@ -995,58 +988,38 @@ $('#list').onchange=e=>{
   }
 };
 
-const joy=$('#joy'),knob=$('#knob');
-let dragging=false,pid=null,joyDir=null,joyTimer=null,lastJoyStep=0;
-const JOY_REPEAT_MS=125;
+const boardbox=document.querySelector('.boardbox');
 
-function stopJoyRepeat(){
-  if(joyTimer){clearInterval(joyTimer);joyTimer=null}
-}
-function tryJoyStep(){
-  if(!dragging||joyDir===null||!humanMode||!run||ended)return;
-  const now=performance.now();
-  if(now-lastJoyStep<JOY_REPEAT_MS-8)return;
-  const moved=resolveTurn(joyDir);
-  if(moved)lastJoyStep=now;
-}
-function resetJoy(){
-  dragging=false;pid=null;joyDir=null;stopJoyRepeat();
-  knob.style.transform='translate(-50%,-50%)';
-  if(humanMode&&!ended&&run)$('#joyhint').textContent='持續推住搖桿即可連續移動';
-}
-function joyMove(e){
-  if(!dragging||e.pointerId!==pid)return;
-  const r=joy.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
-  let dx=e.clientX-cx,dy=e.clientY-cy;
-  const max=45,dist=Math.hypot(dx,dy);
-  if(dist>max){dx=dx/dist*max;dy=dy/dist*max}
-  knob.style.transform='translate(calc(-50% + '+dx+'px),calc(-50% + '+dy+'px))';
+function boardDirectionFromPointer(e){
+  const r=boardbox.getBoundingClientRect();
+  const x=e.clientX-r.left;
+  const y=e.clientY-r.top;
+  const cx=r.width/2;
+  const cy=r.height/2;
+  const dx=x-cx;
+  const dy=y-cy;
 
-  if(dist<22){
-    joyDir=null;
-    stopJoyRepeat();
-    return;
-  }
-
-  const d=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
-  if(joyDir!==d){
-    joyDir=d;
-    lastJoyStep=0;
-    stopJoyRepeat();
-    tryJoyStep();
-    joyTimer=setInterval(tryJoyStep,JOY_REPEAT_MS);
-  }else if(!joyTimer){
-    tryJoyStep();
-    joyTimer=setInterval(tryJoyStep,JOY_REPEAT_MS);
-  }
+  // Divide the square into four triangular zones radiating from the center.
+  // The side with the greatest directional displacement determines movement.
+  if(Math.abs(dx)>Math.abs(dy))return dx>0?1:3;
+  return dy>0?2:0;
 }
-joy.addEventListener('pointerdown',e=>{
+
+boardbox.addEventListener('pointerup',e=>{
   if(!humanMode||!run||ended)return;
-  dragging=true;pid=e.pointerId;joy.setPointerCapture(e.pointerId);joyMove(e);
+  // Ignore clicks on the result overlay/buttons.
+  if(e.target.closest('.overlay'))return;
+
+  const d=boardDirectionFromPointer(e);
+  const labels=['上','右','下','左'];
+  const moved=resolveTurn(d);
+
+  if(moved){
+    $('#joyhint').textContent='已向'+labels[d]+'移動 1 格';
+  }else{
+    $('#joyhint').textContent='這個方向被擋住，AI 不會行動';
+  }
 });
-joy.addEventListener('pointermove',joyMove);
-joy.addEventListener('pointerup',resetJoy);
-joy.addEventListener('pointercancel',resetJoy);
 
 addEventListener('resize',resize);
 init();setTimeout(resize,0);
