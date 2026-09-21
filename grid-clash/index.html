@@ -94,7 +94,7 @@ canvas{display:block;width:100%;height:100%}
 
 <div id="list" class="list"></div>
 <div class="note">
-目前固定 30×30，三種 AI 已改為圈地強化版：APEX-X 圈地預判、RAIDER-X 封口搶線、FRONTIER-X 邊界包圍。AI 會把「完成封閉」視為遠高於普通單格擴張的收益，並主動利用棋盤邊界形成大區域。
+目前固定 30×30。AI 的核心目標已重新訓練成三件事：用封閉快速取得大片領地、主動利用棋盤邊緣完成大圈，以及即使無法立即填色，也會嘗試把對手圍在小區域內限制其可移動空間。APEX 偏均衡、BASTION 偏困敵、SWEEP 偏邊界大圈。
 圈地判定會在每一步所有角色完成移動後，立即重新檢查所有玩家；即使只是其他玩家剛離開已封閉區域，也會立刻觸發填色。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
@@ -106,9 +106,9 @@ const C=document.querySelector('#c'),X=C.getContext('2d');
 const COL=['#5577df','#33343a','#db665f','#3f9f6d','#d59a35','#8c61bd','#2d9dac','#d95e98'];
 const D=[[0,-1],[1,0],[0,1],[-1,0]];
 const STRATS=[
- ['apex','APEX｜均衡圈地'],
- ['bastion','BASTION｜穩健封鎖'],
- ['sweep','SWEEP｜大區掃蕩']
+ ['apex','APEX｜圈地＋困敵'],
+ ['bastion','BASTION｜封鎖困敵'],
+ ['sweep','SWEEP｜邊界大圈']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
@@ -419,26 +419,130 @@ function enemyHeadInLikelyPocket(p,x,y){
   return best<=4?1:0;
 }
 
+function nearestOpponents(p,limit=3){
+  return a
+    .filter(q=>q.id!==p.id)
+    .map(q=>({q,d:Math.abs(q.x-p.x)+Math.abs(q.y-p.y)}))
+    .sort((u,v)=>u.d-v.d)
+    .slice(0,limit)
+    .map(z=>z.q);
+}
+
+function reachableFreedom(q){
+  const total=n*n;
+  const seen=new Uint8Array(total);
+  const work=new Int32Array(total);
+  let head=0,tail=0,count=0;
+  const start=q.y*n+q.x;
+  work[tail++]=start;
+  seen[start]=1;
+
+  while(head<tail){
+    const z=work[head++],x=z%n,y=(z/n)|0;
+    count++;
+
+    for(let d=0;d<4;d++){
+      const nx=x+D[d][0],ny=y+D[d][1];
+      if(!inside(nx,ny))continue;
+      const nz=ny*n+nx;
+      if(seen[nz])continue;
+      const v=g[ny][nx];
+      // An opponent can move only through empty cells or its own territory.
+      if(v!==-1&&v!==q.id)continue;
+      seen[nz]=1;
+      work[tail++]=nz;
+    }
+  }
+  return count;
+}
+
+function confinementBaseline(p){
+  return nearestOpponents(p,3).map(q=>({
+    q,
+    freedom:reachableFreedom(q)
+  }));
+}
+
+function confinementGainWithCells(p,cells,baseline=null){
+  if(!cells||!cells.length)return {gain:0,tight:0,locked:0};
+
+  const painted=[];
+  for(const z of cells){
+    const x=z%n,y=(z/n)|0;
+    if(g[y][x]!==-1)continue;
+    g[y][x]=p.id;
+    painted.push(z);
+  }
+
+  const base=baseline||confinementBaseline(p);
+  let gain=0,tight=0,locked=0;
+
+  for(const item of base){
+    const after=reachableFreedom(item.q);
+    const cut=Math.max(0,item.freedom-after);
+    gain+=cut;
+
+    // Reward turning a broad roaming area into a genuinely small prison.
+    if(after<=100)tight+=100-after;
+    if(after<=45)locked++;
+  }
+
+  for(const z of painted){
+    const x=z%n,y=(z/n)|0;
+    g[y][x]=-1;
+  }
+
+  return {gain,tight,locked};
+}
+
+function confinementGainForCell(p,x,y,baseline){
+  if(!empty(x,y))return {gain:0,tight:0,locked:0};
+  return confinementGainWithCells(p,[y*n+x],baseline);
+}
+
+function pathEdgeValue(path){
+  if(!path||!path.length)return 0;
+  let edgeHits=0;
+  const sides=new Set();
+
+  for(const z of path){
+    const x=z%n,y=(z/n)|0;
+    if(y===0){edgeHits++;sides.add('T')}
+    if(y===n-1){edgeHits++;sides.add('B')}
+    if(x===0){edgeHits++;sides.add('L')}
+    if(x===n-1){edgeHits++;sides.add('R')}
+  }
+
+  // Reaching/using a board edge is valuable because the edge itself functions
+  // as part of the enclosure wall. Reaching two different sides is even stronger.
+  return edgeHits+Math.max(0,sides.size-1)*8;
+}
+
 function styleWeights(style){
-  // 30x30 enclosure-trained profiles.
-  // All three use the same long-horizon planner; weights only change tactical emphasis.
+  // 30x30 human-inspired training targets:
+  // 1) close loops for explosive territory growth
+  // 2) use board edges as enclosure walls
+  // 3) surround opponents even when their presence prevents immediate auto-fill
   if(style==='bastion')return {
-    cap:233,open:9.5,enemy:17.5,edge:1.8,dist:1.75,bridge:17.5,
-    revisit:31,block:148,race:27,contest:86,space:14,
-    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
-    loopDepth:18,beam:44,minExtra:4
+    cap:245,open:8.5,enemy:20,edge:3.2,dist:1.7,bridge:19,
+    revisit:32,block:150,race:28,contest:88,space:12,
+    loopBias:2.4,loopArea:66,loopEff:38,loopLen:1.15,
+    loopDepth:20,beam:52,minExtra:3,
+    trap:7.5,trapTight:4.8,trapLock:240,edgePlan:24
   };
   if(style==='sweep')return {
-    cap:233,open:13.5,enemy:14,edge:1.6,dist:1.6,bridge:17,
-    revisit:31,block:147,race:25,contest:79,space:18,
-    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
-    loopDepth:18,beam:44,minExtra:4
+    cap:262,open:14,enemy:12,edge:4.8,dist:1.5,bridge:18,
+    revisit:30,block:145,race:23,contest:74,space:20,
+    loopBias:2.7,loopArea:76,loopEff:42,loopLen:1.0,
+    loopDepth:22,beam:56,minExtra:3,
+    trap:4.3,trapTight:2.6,trapLock:150,edgePlan:42
   };
   return {
-    cap:235,open:10,enemy:15,edge:2.0,dist:1.8,bridge:18,
-    revisit:30,block:145,race:24,contest:82,space:15,
-    loopBias:2.2,loopArea:60,loopEff:34,loopLen:1.2,
-    loopDepth:18,beam:44,minExtra:4
+    cap:255,open:10.5,enemy:16,edge:3.8,dist:1.65,bridge:19,
+    revisit:31,block:148,race:25,contest:80,space:15,
+    loopBias:2.55,loopArea:70,loopEff:40,loopLen:1.05,
+    loopDepth:21,beam:54,minExtra:3,
+    trap:6.0,trapTight:3.8,trapLock:200,edgePlan:32
   };
 }
 
@@ -533,13 +637,14 @@ function findEnclosurePlan(p){
   if(p.loopCooldown>0)return null;
 
   const {dist:ownDist,own,ownBorder}=buildOwnDistance(p);
+  const trapBase=confinementBaseline(p);
   const start=p.y*n+p.x;
   let states=[{
     h:0,z:start,path:[],dirs:[],
     minx:p.x,maxx:p.x,miny:p.y,maxy:p.y
   }];
 
-  let bestScore=-Infinity,bestDirs=null,bestGain=0;
+  let bestScore=-Infinity,bestDirs=null;
 
   for(let depth=1;depth<=W.loopDepth;depth++){
     const next=[];
@@ -565,25 +670,37 @@ function findEnclosurePlan(p){
           if(own[az]&&(az!==start||depth>=4)){adjOwn=true;break}
         }
 
-        const touchesUsefulBorder=
-          ownBorder&&(nx===0||nx===n-1||ny===0||ny===n-1);
+        const onBorder=nx===0||nx===n-1||ny===0||ny===n-1;
+        const touchesUsefulBorder=ownBorder&&onBorder;
 
+        // A candidate becomes strategically complete if it reconnects to our
+        // territory or connects an existing border-touching network back to a border.
         if(depth>=4&&(adjOwn||touchesUsefulBorder)){
           const gain=estimatePathCapture(p,path);
-          const extra=gain-depth;
+          const extra=Math.max(0,gain-depth);
+          const trap=confinementGainWithCells(p,path,trapBase);
+          const edgeValue=pathEdgeValue(path);
+          const efficiency=extra/Math.max(1,depth);
 
-          if(extra>=W.minExtra){
-            const efficiency=extra/Math.max(1,depth);
-            const score=
-              extra*W.loopArea+
-              efficiency*W.loopEff-
-              depth*W.loopLen;
+          // Important: a loop around an opponent may have zero immediate fill
+          // because the opponent is inside. It is still valuable if it sharply
+          // reduces that opponent's reachable area.
+          const score=
+            extra*W.loopArea+
+            efficiency*W.loopEff+
+            trap.gain*W.trap+
+            trap.tight*W.trapTight+
+            trap.locked*W.trapLock+
+            edgeValue*W.edgePlan-
+            depth*W.loopLen;
 
-            if(score>bestScore){
-              bestScore=score;
-              bestDirs=dirs;
-              bestGain=gain;
-            }
+          const meaningfulCapture=extra>=W.minExtra;
+          const meaningfulTrap=trap.gain>=18||trap.locked>0;
+          const meaningfulEdge=edgeValue>=8&&extra>=2;
+
+          if((meaningfulCapture||meaningfulTrap||meaningfulEdge)&&score>bestScore){
+            bestScore=score;
+            bestDirs=dirs;
           }
         }
 
@@ -595,18 +712,21 @@ function findEnclosurePlan(p){
         const od=ownDist[z];
         const close=
           depth>W.loopDepth/2
-            ? Math.max(0,8-od)*5
-            : Math.min(od,6)*1.4;
+            ? Math.max(0,9-od)*5.5
+            : Math.min(od,7)*1.5;
+        const edgeSeek=Math.max(0,6-nearEdge(nx,ny))*W.edge*.45;
+        const enemySeek=enemy<=8?(9-enemy)*.7:0;
         const turnBonus=
           dirs.length>=2&&dirs[dirs.length-1]!==dirs[dirs.length-2]
-            ? 1.2 : 0;
+            ? 1.4 : 0;
 
         const h=
-          bbox*1.6+
+          bbox*1.75+
           depth+
-          open*1.8+
+          open*1.6+
           close+
-          Math.min(enemy,6)*.25+
+          edgeSeek+
+          enemySeek+
           turnBonus+
           Math.random()*.05;
 
@@ -628,9 +748,7 @@ function findEnclosurePlan(p){
     states=kept;
   }
 
-  if(!bestDirs)return null;
-  const extra=bestGain-bestDirs.length;
-  return extra*W.loopBias>=W.minExtra*W.loopBias ? bestDirs : null;
+  return bestDirs;
 }
 
 function chooseNewTarget(p){
@@ -638,6 +756,7 @@ function chooseNewTarget(p){
   if(!cands.length)return null;
 
   const W=styleWeights(p.strategy);
+  const trapBase=confinementBaseline(p);
   for(const c of cands){
     const k=key(c.x,c.y);
     const nextX=p.x+D[c.first][0],nextY=p.y+D[c.first][1];
@@ -675,10 +794,17 @@ function chooseNewTarget(p){
 
   for(const c of top){
     const gain=estimateCapture(p,c.x,c.y);
+    const trap=confinementGainForCell(p,c.x,c.y,trapBase);
     const room=emptyAdj(c.x,c.y)+Math.max(0,4-nearEdge(c.x,c.y))*.2;
+    const edgeCell=nearEdge(c.x,c.y)===0?1:0;
+
     c.score=
       c.base+
       Math.max(0,gain-1)*W.cap+
+      trap.gain*W.trap+
+      trap.tight*W.trapTight+
+      trap.locked*W.trapLock+
+      edgeCell*W.edgePlan+
       room*W.space;
   }
 
@@ -872,6 +998,11 @@ function resolveTurn(hdir=null){
     if(p.score>before[p.id]){
       p.noGain=0;
       p.panic=Math.max(0,p.panic-1);
+      if(!p.h&&p.score-before[p.id]>=4){
+        p.loopPlan=[];
+        p.loopPos=0;
+        p.loopCooldown=0;
+      }
     }else{
       p.noGain++;
       if(!p.h&&p.noGain>=8){
