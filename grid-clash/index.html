@@ -93,9 +93,9 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="list" class="list"></div>
-<div id="atlasStatus" class="note" role="status">ATLAS-R｜全域競速 v1.1：限 2 人；30×30 實驗性。循環脫困修正版，首次使用需下載模型；運算在你的瀏覽器完成。</div>
+<div id="atlasStatus" class="note" role="status">ATLAS-R｜全域競速 v1.1：2～8 人皆可選；多人與 30×30 為實驗性。首次使用需下載模型；運算在你的瀏覽器完成。</div>
 <div class="note">
-棋盤可選 15×15 或 30×30。ATLAS-R v1.1 使用神經網路＋同時動作空間搜尋，新增重複走位脫困，限雙人模式；30×30 沿用 15×15 權重，屬實驗性，尚未完成棋力評估。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
+棋盤可選 15×15 或 30×30。ATLAS-R v1.1 使用神經網路＋同時動作空間搜尋，支援 2～8 人並保留重複走位脫困。多人與 30×30 沿用 15×15 雙人權重，屬實驗性擴充，並非該模式專用訓練；多人搜尋採有限對手動作樣本，不保證涵蓋所有情境。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
 每回合移動完成後，從各玩家的棋子出發，沿空白格與自己的領地判斷可到達範圍。空白格只有一人能到達就歸該玩家；多人能到達或無人能到達則保持空白。此判定忽略暫時禁止格，不受區域大小影響，也不覆蓋既有領地。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 多人搶同一空格時，整個回合取消，所有角色留在原位。搶格位置顯示紅色叉號，下一個成功結算的回合禁止任何人進入，結算後解除；再次搶格會累積禁止格。若玩家完全無路可走，點擊棋盤可原地等待一回合。
@@ -113,7 +113,7 @@ const STRATS=[
  ['apex','APEX-R｜自適應獵場'],
  ['bastion','BASTION-R｜困敵封鎖'],
  ['sweep','SWEEP-R｜邊界大圈'],
- ['atlas','ATLAS-R｜全域競速 v1.1（限2人）']
+ ['atlas','ATLAS-R｜全域競速 v1.1']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
@@ -864,14 +864,14 @@ function init(){
     const dir=Math.abs(dx)>Math.abs(dy)?(dx>0?1:3):(dy>0?2:0);
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
-      strategy:strategyPrefs[i]==='atlas'&&k!==2?'apex':(strategyPrefs[i]||STRATS[i%3][0]),color:COL[i],
+      strategy:strategyPrefs[i]||STRATS[i%3][0],color:COL[i],
       commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map(),loopPlan:[],loopPos:0,loopCooldown:0,atlasEscape:false,atlasTarget:null,atlasAvoid:null
     };
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
   }
   renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊或長按棋盤四側來移動';
-  $('#atlasStatus').textContent='ATLAS-R v1.1：限 2 人；循環脫困修正版，30×30 實驗性。首次使用需下載模型。';
+  $('#atlasStatus').textContent='ATLAS-R v1.1：2～8 人皆可選；多人與 30×30 為實驗性。首次使用需下載模型。';
 }
 
 function recordLoopState(){
@@ -1040,6 +1040,7 @@ function cancelAtlas(){
 }
 
 function atlasProbabilities(logits){
+  if(logits.length!==a.length*4||logits.some(v=>!Number.isFinite(v)))throw new Error('ATLAS 模型輸出不完整');
   return a.map(p=>{
     const legal=canExpand(p)?legalDirs(p):[], probabilities=[0,0,0,0];
     if(!legal.length)return probabilities;
@@ -1050,8 +1051,11 @@ function atlasProbabilities(logits){
   });
 }
 
+function atlasScoreMargin(player,scores=a.map(p=>p.score)){
+  return scores[player]-Math.max(...scores.filter((_,i)=>i!==player));
+}
 function atlasRaceValue(player){
-  const score=a[player].score-a[1-player].score;
+  const score=atlasScoreMargin(player);
   if(occ===n*n||turn>n*n*8||a.every(p=>!canExpand(p)))return score;
   const distances=a.map(p=>{
     const dist=new Int32Array(n*n).fill(1000000),queue=[p.y*n+p.x];dist[queue[0]]=0;
@@ -1067,11 +1071,13 @@ function atlasRaceValue(player){
     }
     return dist;
   });
-  let value=score;
+  const projected=a.map(p=>p.score);
   for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(g[y][x]===-1){
-    const z=y*n+x;value+=Math.sign(distances[1-player][z]-distances[player][z]);
+    const z=y*n+x,min=Math.min(...distances.map(d=>d[z]));
+    const nearest=distances.map((d,i)=>d[z]===min?i:-1).filter(i=>i>=0);
+    if(min<1000000&&nearest.length===1)projected[nearest[0]]++;
   }
-  return value;
+  return atlasScoreMargin(player,projected);
 }
 
 function atlasBranchValue(player,actions){
@@ -1080,17 +1086,38 @@ function atlasBranchValue(player,actions){
     // Reuse the page's capture and reachability rules on a private board.
     g=g.map(row=>row.slice());a=a.map(p=>({...p}));temporaryBlocks=new Set(temporaryBlocks);tailHistory=tailHistory.slice();
     const proposals=actions.map((d,i)=>d===null?null:[a[i].x+D[d][0],a[i].y+D[d][1]]);
-    if(proposals[0]&&proposals[1]&&key(...proposals[0])===key(...proposals[1])){
-      temporaryBlocks.add(key(...proposals[0]));
-      return occ===n*n-1||repeatedEndgameClash(true)||idleAttempts+1>=2*n*n?a[player].score-a[1-player].score:atlasRaceValue(player);
+    const destinations=new Map();
+    for(const pos of proposals)if(pos){const k=key(...pos);destinations.set(k,(destinations.get(k)||0)+1);}
+    const collisions=[...destinations].filter(([,count])=>count>1);
+    if(collisions.length){
+      for(const [k]of collisions)temporaryBlocks.add(k);
+      return occ===n*n-1||repeatedEndgameClash(true)||idleAttempts+1>=2*n*n?atlasScoreMargin(player):atlasRaceValue(player);
     }
     turn++;
     proposals.forEach((pos,i)=>{if(pos){[a[i].x,a[i].y]=pos;g[pos[1]][pos[0]]=i;}});
     resolveAllCaptures();recountScores();temporaryBlocks.clear();
-    if(repeatedEndgameClash(false,occ>saved.occ))return a[player].score-a[1-player].score;
-    if(occ===saved.occ&&idleAttempts+1>=2*n*n)return a[player].score-a[1-player].score;
+    if(repeatedEndgameClash(false,occ>saved.occ))return atlasScoreMargin(player);
+    if(occ===saved.occ&&idleAttempts+1>=2*n*n)return atlasScoreMargin(player);
     return atlasRaceValue(player);
   }finally{({g,a,turn,occ,temporaryBlocks,tailHistory}=saved);}
+}
+
+function atlasReplyScenarios(player,probabilities){
+  if(a.length===2){
+    const enemy=1-player,replies=canExpand(a[enemy])?legalDirs(a[enemy]):[];
+    if(!replies.length)replies.push(null);
+    return replies.map(reply=>{const actions=[null,null];actions[enemy]=reply;
+      return {actions,weight:reply===null?1:probabilities[enemy][reply]};});
+  }
+  // ponytail: 16 deterministic stratified joint samples, not exhaustive minimax.
+  const offsets=[0,.61803398875,.41421356237,.73205080757,.2360679775,.64575131106,.31662479036,.60555127546];
+  return Array.from({length:16},(_,sample)=>({weight:1/16,actions:a.map(p=>{
+    if(p.id===player||!canExpand(p))return null;
+    const legal=legalDirs(p);if(!legal.length)return null;
+    let u=((sample+.5)/16+offsets[p.id])%1;
+    for(const d of legal){u-=probabilities[p.id][d];if(u<=0)return d;}
+    return legal[legal.length-1];
+  })}));
 }
 
 function atlasChoose(player,probabilities){
@@ -1112,15 +1139,14 @@ function atlasChoose(player,probabilities){
     return target.first;
   }
   if(legal.length<2)return legal[0]??null;
-  const enemy=1-player,replies=canExpand(a[enemy])?legalDirs(a[enemy]):[];
-  if(!replies.length)replies.push(null);
+  const scenarios=atlasReplyScenarios(player,probabilities);
   let best=-Infinity,chosen=legal[0];
   for(const d of legal){
     let expected=0,worst=Infinity;
-    for(const reply of replies){
-      const actions=[null,null];actions[player]=d;actions[enemy]=reply;
+    for(const scenario of scenarios){
+      const actions=scenario.actions.slice();actions[player]=d;
       const value=atlasBranchValue(player,actions);
-      expected+=value*(reply===null?1:probabilities[enemy][reply]);worst=Math.min(worst,value);
+      expected+=value*scenario.weight;worst=Math.min(worst,value);
     }
     const score=.75*expected+.25*worst+.5*Math.log(Math.max(probabilities[player][d],1e-8));
     if(score>best){best=score;chosen=d;}
@@ -1138,7 +1164,7 @@ async function playTurn(hdir=null){
   $('#atlasStatus').textContent='ATLAS-R 思考中（首次使用會下載模型）…';
   try{
     if(!atlasWorker){
-      atlasWorker=new Worker('atlas-worker.js');
+      atlasWorker=new Worker('atlas-worker.js?v=multiplayer1');
       atlasWorker.onmessage=({data})=>{
         if(atlasPending?.id!==data.id)return;
         const pending=atlasPending;atlasPending=null;
@@ -1158,7 +1184,7 @@ async function playTurn(hdir=null){
     const probabilities=atlasProbabilities(logits);
     atlasActions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
     const result=resolveTurn(hdir);
-    $('#atlasStatus').textContent='ATLAS-R｜全域競速 v1.1 · '+n+'×'+n+'／2 人'+(n===30?'（實驗性，尚未完成棋力評估）':'')+' · 瀏覽器本機運算';
+    $('#atlasStatus').textContent='ATLAS-R｜全域競速 v1.1 · '+n+'×'+n+'／'+a.length+' 人'+(a.length>2||n===30?'（實驗性，非此模式專用訓練）':'')+' · 瀏覽器本機運算';
     return result;
   }catch(error){
     if(id!==atlasSequence)return false;
@@ -1188,7 +1214,7 @@ function finish(reason='遊戲結束'){
 }
 function renderList(){
   $('#list').innerHTML=a.map(p=>{
-    const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+(v==='atlas'&&a.length!==2?' disabled':'')+'>'+t+(v==='atlas'&&n===30?' · 30×30 實驗性':'')+'</option>').join('');
+    const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+'>'+t+(v==='atlas'&&(n===30||a.length>2)?' · 實驗性':'')+'</option>').join('');
     return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家點擊／長按操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div></div>';
   }).join('');
 }

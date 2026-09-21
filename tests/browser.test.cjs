@@ -13,7 +13,7 @@ const server=http.createServer((req,res)=>{
     res.setHeader('Content-Type',target.endsWith('.js')?'text/javascript':target.endsWith('.html')?'text/html; charset=utf-8':'application/octet-stream');
     let content=fs.readFileSync(target);
     if(target.endsWith('index.html'))content=content.toString().replace('init();setTimeout(resize,0);',
-      "window.gridTest=()=>({turn,n,run,positions:a.map(p=>[p.x,p.y]),pending:!!atlasPending});window.gridSelfPlay=async size=>{$('#size').value=String(size);$('#count').value='2';$('#human').checked=false;strategyPrefs[0]=strategyPrefs[1]='atlas';init();run=true;let attempts=0;while(!ended&&attempts++<n*n*4)await playTurn();return {turn,ended,endReason,occ,attempts};};init();setTimeout(resize,0);");
+      "window.gridTest=()=>({turn,n,run,positions:a.map(p=>[p.x,p.y]),pending:!!atlasPending});window.gridSelfPlay=async(size,count=2)=>{$('#size').value=String(size);$('#count').value=String(count);$('#human').checked=false;strategyPrefs.fill('atlas');init();run=true;let attempts=0;while(!ended&&attempts++<n*n*4)await playTurn();return {turn,ended,endReason,occ,attempts};};init();setTimeout(resize,0);");
     res.end(content);
   }catch{res.writeHead(404).end();}
 });
@@ -51,9 +51,27 @@ const server=http.createServer((req,res)=>{
       assert(!await page.locator('#atlasStatus').textContent().then(t=>t.includes('失敗')));
       console.log(`${size}x${size}: WASM policy parity passed; worker ms: ${timings.map(v=>v.toFixed(1)).join(', ')}`);
     }
+    for(const size of ['15','30'])for(let count=3;count<=8;count++){
+      await page.selectOption('#size',size);await page.selectOption('#count',String(count));
+      assert.equal(await page.locator('option[value="atlas"]:disabled').count(),0);
+      for(const selector of await page.locator('.strategy').all())await selector.selectOption('atlas');
+      const start=Date.now();await page.click('#step');
+      await page.waitForFunction(()=>document.querySelector('#atlasStatus').textContent.includes('瀏覽器本機運算'));
+      assert.equal((await page.evaluate(()=>gridTest())).turn,1);
+      console.log('Multiplayer '+size+' / '+count+' first turn ms: '+(Date.now()-start));
+    }
     await page.selectOption('#count','3');
-    assert.equal(await page.locator('option[value="atlas"]:disabled').count(),3);
+    await page.selectOption('#size','15');await page.check('#human');
+    await page.locator('.strategy').nth(0).selectOption('apex');
+    await page.locator('.strategy').nth(1).selectOption('atlas');
+    await page.click('#start');
+    const mixedCanvas=await page.locator('#c').boundingBox();
+    await page.locator('#c').click({position:{x:mixedCanvas.width/2,y:mixedCanvas.height*.9}});
+    await page.waitForFunction(()=>document.querySelector('#atlasStatus').textContent.includes('瀏覽器本機運算'));
+    assert.equal((await page.evaluate(()=>gridTest())).turn,1);
+    await page.uncheck('#human');
     await page.selectOption('#count','2');
+    await page.locator('.strategy').nth(1).selectOption('atlas');
     await page.selectOption('#size','15');
     await page.check('#human');
     await page.click('#start');
@@ -69,7 +87,13 @@ const server=http.createServer((req,res)=>{
       assert(result.ended);assert.equal(result.occ,size*size);
       console.log('Full browser ATLAS self-play '+size+': '+JSON.stringify(result));
     }
+    for(const size of (process.env.ATLAS_SMOKE?[]:[15,30]))for(const count of [3,4]){
+      const result=await page.evaluate(([size,count])=>gridSelfPlay(size,count),[size,count]);
+      assert(result.ended);assert(result.occ>=size*size-4);
+      console.log('Full multiplayer '+size+' / '+count+': '+JSON.stringify(result));
+    }
     await page.selectOption('#size','30');
+    await page.selectOption('#count','2');
     await page.uncheck('#human');
     await page.evaluate(()=>{
       window.Worker=class {
