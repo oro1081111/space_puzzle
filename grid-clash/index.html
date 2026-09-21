@@ -93,9 +93,9 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="list" class="list"></div>
-<div id="atlasStatus" class="note" role="status">ATLAS-R：15×15 三人局自動使用 Trio v1.0 專用模型；其他模式維持 v1.1。首次使用需下載模型；運算在你的瀏覽器完成。</div>
+<div id="atlasStatus" class="note" role="status">ATLAS-R：15×15 三人局使用 Trio v1.1（多步圈地＋完整聯合動作搜尋）；其他模式維持原版。首次使用需下載模型；運算在你的瀏覽器完成。</div>
 <div class="note">
-棋盤可選 15×15 或 30×30。ATLAS-R 使用神經網路＋同時動作空間搜尋，支援 2～8 人並保留重複走位脫困。15×15 三人局自動使用三人專用微調的 Trio v1.0；雙人維持 v1.1。四人以上與 30×30 仍沿用雙人權重，屬實驗性擴充。多人搜尋採有限對手動作樣本，不保證涵蓋所有情境。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
+棋盤可選 15×15 或 30×30。ATLAS-R 使用神經網路＋同時動作空間搜尋，支援 2～8 人並保留重複走位脫困。15×15 三人局使用 Trio v1.1：保留三人權重、加入多步圈地規劃，反應式搜尋完整列舉兩位對手的合法動作組合；不保證獲勝。雙人維持 v1.1。四人以上與 30×30 仍沿用雙人權重與原搜尋，屬實驗性擴充。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
 每回合移動完成後，從各玩家的棋子出發，沿空白格與自己的領地判斷可到達範圍。空白格只有一人能到達就歸該玩家；多人能到達或無人能到達則保持空白。此判定忽略暫時禁止格，不受區域大小影響，也不覆蓋既有領地。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 多人搶同一空格時，整個回合取消，所有角色留在原位。搶格位置顯示紅色叉號，下一個成功結算的回合禁止任何人進入，結算後解除；再次搶格會累積禁止格。若玩家完全無路可走，點擊棋盤可原地等待一回合。
@@ -871,7 +871,7 @@ function init(){
     a.push(p);g[y][x]=i;occ++;
   }
   renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊或長按棋盤四側來移動';
-  $('#atlasStatus').textContent='ATLAS-R：15×15 三人局使用 Trio v1.0；其他模式維持 v1.1。首次使用需下載模型。';
+  $('#atlasStatus').textContent='ATLAS-R：15×15 三人局使用 Trio v1.1（多步圈地＋完整聯合動作搜尋）；其他模式維持原版。';
 }
 
 function recordLoopState(){
@@ -1103,6 +1103,20 @@ function atlasBranchValue(player,actions){
 }
 
 function atlasReplyScenarios(player,probabilities){
+  if(n===15&&a.length===3){
+    // Two enemies have at most 4 x 4 legal replies. Cover each joint reply once;
+    // do not assume heuristic opponents behave like our learned policy.
+    let rows=[{actions:Array(3).fill(null),weight:1}];
+    for(const p of a)if(p.id!==player){
+      const dirs=canExpand(p)?legalDirs(p):[];
+      if(!dirs.length)dirs.push(null);
+      rows=rows.flatMap(row=>dirs.map(d=>{
+        const actions=row.actions.slice();actions[p.id]=d;
+        return {actions,weight:row.weight/dirs.length};
+      }));
+    }
+    return rows;
+  }
   if(a.length===2){
     const enemy=1-player,replies=canExpand(a[enemy])?legalDirs(a[enemy]):[];
     if(!replies.length)replies.push(null);
@@ -1120,8 +1134,28 @@ function atlasReplyScenarios(player,probabilities){
   })}));
 }
 
+function atlasTrioPlan(p){
+  // Reuse the existing bounded enclosure planner. Keep a route until completion,
+  // capture, collision, or a newly illegal next step; never consume a banned move.
+  if(!p.loopPlan?.length||p.loopPos>=p.loopPlan.length){
+    p.loopPlan=findEnclosurePlan(p)||[];p.loopPos=0;
+  }
+  if(p.loopPlan.length){
+    const d=p.loopPlan[p.loopPos];
+    if(legalDirs(p).includes(d)&&empty(p.x+D[d][0],p.y+D[d][1])){
+      p.loopPos++;return d;
+    }
+    p.loopPlan=[];p.loopPos=0;
+  }
+  return null;
+}
+
 function atlasChoose(player,probabilities){
   const p=a[player];
+  if(n===15&&a.length===3){
+    const planned=atlasTrioPlan(p);
+    if(planned!==null)return planned;
+  }
   const legal=canExpand(a[player])?legalDirs(a[player]):[];
   if(!legal.length)return null;
   if(p.noGain>=4&&(p.recent.filter(k=>k===key(p.x,p.y)).length>=3||p.noGain>=2*n))p.atlasEscape=true;
@@ -1164,7 +1198,7 @@ async function playTurn(hdir=null){
   $('#atlasStatus').textContent='ATLAS-R 思考中（首次使用會下載模型）…';
   try{
     if(!atlasWorker){
-      atlasWorker=new Worker('atlas-worker.js?v=trio1');
+      atlasWorker=new Worker('atlas-worker.js?v=trio11');
       atlasWorker.onmessage=({data})=>{
         if(atlasPending?.id!==data.id)return;
         const pending=atlasPending;atlasPending=null;
@@ -1184,7 +1218,7 @@ async function playTurn(hdir=null){
     const probabilities=atlasProbabilities(logits);
     atlasActions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
     const result=resolveTurn(hdir);
-    $('#atlasStatus').textContent='ATLAS-R｜全域競速 '+(n===15&&a.length===3?'Trio v1.0（三人專用）':'v1.1')+' · '+n+'×'+n+'／'+a.length+' 人'+(a.length>3||n===30?'（實驗性，非此模式專用訓練）':'')+' · 瀏覽器本機運算';
+    $('#atlasStatus').textContent='ATLAS-R｜全域競速 '+(n===15&&a.length===3?'Trio v1.1（三人專用）':'v1.1')+' · '+n+'×'+n+'／'+a.length+' 人'+(a.length>3||n===30?'（實驗性，非此模式專用訓練）':'')+' · 瀏覽器本機運算';
     return result;
   }catch(error){
     if(id!==atlasSequence)return false;

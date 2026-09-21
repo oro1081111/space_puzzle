@@ -19,6 +19,15 @@ const game=new Function('document',core+`
       temporaryBlocks=new Set(state.blocks.map(pos=>key(...pos)));recountScores();},
     snapshot(){return JSON.stringify({g,a,turn,occ,blocks:[...temporaryBlocks],tailHistory});},
     race:atlasRaceValue,branch:atlasBranchValue,
+    replies(player){return atlasReplyScenarios(player,atlasProbabilities(Array(a.length*4).fill(0)));},
+    legal(){return a.map(p=>canExpand(p)?legalDirs(p):[null]);},
+    plannedStep(block){
+      const p=a[0],d=legalDirs(p)[0];p.loopPlan=[d];p.loopPos=0;
+      if(block)temporaryBlocks.add(key(p.x+D[d][0],p.y+D[d][1]));
+      const before=JSON.stringify({g,positions:a.map(q=>[q.x,q.y]),turn,occ});
+      const selected=atlasTrioPlan(p);
+      return {selected,d,plan:p.loopPlan,pos:p.loopPos,unchanged:before===JSON.stringify({g,positions:a.map(q=>[q.x,q.y]),turn,occ})};
+    },
     actions(logits){const probs=atlasProbabilities(logits.flat());return a.map(p=>atlasChoose(p.id,probs));},
     size(size,count){$('#size').value=String(size);$('#count').value=String(count);init();return {n,strategies:a.map(p=>p.strategy),options:$('#list').innerHTML};}
   };
@@ -43,3 +52,14 @@ const snapshot=game.snapshot();
 assert.equal(game.branch(0,[1,null,1,3]),game.race(0),'Collision of players 2 and 3 cancels ALL moves');
 assert.equal(game.snapshot(),snapshot);
 console.log(fixtures.length+' Python/browser search parity fixtures passed; board sizes and ATLAS scope passed.');
+game.size(15,3);
+for(let player=0;player<3;player++){
+  const replies=game.replies(player),legal=game.legal();
+  assert.equal(replies.length,legal.filter((_,i)=>i!==player).reduce((size,dirs)=>size*dirs.length,1));
+  assert.equal(new Set(replies.map(r=>JSON.stringify(r.actions))).size,replies.length);
+  assert(Math.abs(replies.reduce((sum,r)=>sum+r.weight,0)-1)<1e-10);
+  for(const row of replies)row.actions.forEach((d,i)=>assert(i===player?d===null:legal[i].includes(d)));
+}
+let plan=game.plannedStep(false);assert.equal(plan.selected,plan.d);assert.equal(plan.pos,1);assert(plan.unchanged);
+game.size(15,3);plan=game.plannedStep(true);assert.equal(plan.selected,null);assert.deepEqual(plan.plan,[]);assert(plan.unchanged);
+console.log('Three-player exhaustive replies and legal/blocked multi-step plan checks passed.');

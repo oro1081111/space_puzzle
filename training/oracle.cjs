@@ -2,7 +2,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
-const html = fs.readFileSync(path.join(__dirname, '../grid-clash/index.html'), 'utf8');
+const sourceRef=process.env.TRIO_SOURCE_REF;
+if(sourceRef&&!/^[0-9a-f]{7,40}$/.test(sourceRef))throw new Error('Expected a frozen commit hash');
+const html = sourceRef?require('node:child_process').execFileSync('git',['show',sourceRef+':grid-clash/index.html'],{cwd:path.join(__dirname,'..'),encoding:'utf8'}):fs.readFileSync(path.join(__dirname, '../grid-clash/index.html'), 'utf8');
 const script = html.split('<script>')[1].split('</script>')[0];
 const elements = new Map();
 const document = {querySelector(selector) {
@@ -20,7 +22,30 @@ seededMath.random = () => {
   return seed/4294967296;
 };
 const extracted = script.slice(script.indexOf('const C='), script.indexOf('const boardbox='));
-const core = extracted;
+let core = extracted;
+// Offline ablations only; never enabled by browser requests.
+const ablation=process.env.TRIO_ABLATION||'';
+if(ablation){
+  if(ablation.includes('exact'))core+=`\nconst sampledReplies=atlasReplyScenarios;atlasReplyScenarios=function(player,probabilities){
+    if(n!==15||a.length!==3)return sampledReplies(player,probabilities);
+    let rows=[{actions:Array(3).fill(null),weight:1}];
+    for(const p of a)if(p.id!==player){const dirs=canExpand(p)?legalDirs(p):[];if(!dirs.length)dirs.push(null);
+      rows=rows.flatMap(row=>dirs.map(d=>{const actions=row.actions.slice();actions[p.id]=d;return {actions,weight:row.weight/dirs.length};}));}
+    return rows;
+  };`;
+  if(ablation.includes('noprior'))core=core.replace('.5*Math.log(Math.max(probabilities[player][d],1e-8))','(n===15&&a.length===3?0:.5)*Math.log(Math.max(probabilities[player][d],1e-8))');
+  if(ablation.includes('own'))core=core.replace('return atlasScoreMargin(player,projected);','return n===15&&a.length===3?projected[player]:atlasScoreMargin(player,projected);');
+  if(ablation.includes('enclosure'))core+=`\nconst reactiveChoice=atlasChoose;atlasChoose=function(player,probabilities){
+    if(n===15&&a.length===3){const p=a[player];
+      if(!p.loopPlan?.length||p.loopPos>=p.loopPlan.length){p.loopPlan=findEnclosurePlan(p)||[];p.loopPos=0;}
+      if(p.loopPlan.length){const d=p.loopPlan[p.loopPos];
+        if(legalDirs(p).includes(d)&&empty(p.x+D[d][0],p.y+D[d][1])){p.loopPos++;return d;}
+        p.loopPlan=[];p.loopPos=0;
+      }
+    }
+    return reactiveChoice(player,probabilities);
+  };`;
+}
 const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
   const originalAI=aiDirection, originalTarget=chooseNewTarget;
   const state=()=>({board:g,positions:a.map(p=>[p.x,p.y]),scores:a.map(p=>p.score),
