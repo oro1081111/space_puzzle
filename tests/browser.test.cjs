@@ -51,6 +51,23 @@ const server=http.createServer((req,res)=>{
       assert(!await page.locator('#atlasStatus').textContent().then(t=>t.includes('失敗')));
       console.log(`${size}x${size}: WASM policy parity passed; worker ms: ${timings.map(v=>v.toFixed(1)).join(', ')}`);
     }
+    const trioFixtures=JSON.parse(fs.readFileSync(path.join(__dirname,'atlas-fixtures-3p.json')));
+    const twoPlayerFixture=JSON.parse(fs.readFileSync(path.join(__dirname,'atlas-fixtures.json')))[0];
+    for(const fixture of [...trioFixtures.filter((_,i)=>i%5===0),twoPlayerFixture]){
+      const result=await page.evaluate(state=>new Promise((resolve,reject)=>{
+        const timeout=setTimeout(()=>reject(new Error('Trio worker timeout')),60000);
+        testWorker.onmessage=({data})=>{clearTimeout(timeout);resolve(data);};
+        testWorker.postMessage({id:2,state});
+      }),fixture.state);
+      assert(!result.error,result.error);
+      assert.equal(result.logits.length,fixture.state.positions.length*4);
+      fixture.logits.flat().forEach((expected,i)=>assert(Math.abs(expected-result.logits[i])<0.0001));
+    }
+    console.log('Trio WASM parity and switching back to frozen two-player model passed.');
+    const trioGame=await page.evaluate(()=>gridSelfPlay(15,3));
+    assert(trioGame.ended);assert(trioGame.occ>=221);
+    assert((await page.locator('#atlasStatus').textContent()).includes('Trio v1.0'));
+    console.log('Trio full self-play: '+JSON.stringify(trioGame));
     for(const size of ['15','30'])for(let count=3;count<=8;count++){
       await page.selectOption('#size',size);await page.selectOption('#count',String(count));
       assert.equal(await page.locator('option[value="atlas"]:disabled').count(),0);

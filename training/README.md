@@ -1,5 +1,7 @@
 # Grid Clash 訓練工作區
 
+最新三人專用訓練與發布記錄：[ATLAS-R Trio v1.0](ATLAS_TRIO_v1.md)。只針對 15×15 三人局，已加入獨立微調／評估入口 `training.three_player`；以下保留先前雙人開發歷史，不代表目前網頁的全部支援範圍。
+
 第三輪新增受控補訓、無副作用老師查詢與一回合同時動作搜尋；完整正／負結果見 [DAGGER_15x15.md](DAGGER_15x15.md)。本輪補訓未勝過 v2；較強的候選是 **v2 權重＋空間搜尋**，不是新的 DAgger 權重。
 
 ```powershell

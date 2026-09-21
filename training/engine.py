@@ -126,14 +126,12 @@ class Game:
         return True
 
     def observation(self, player):
-        opponent = 1 - player
         data = np.zeros((7, self.n, self.n), dtype=np.float32)
         data[0] = self.board == player
-        data[1] = self.board == opponent
+        data[1] = (self.board >= 0) & (self.board != player)
         data[2] = self.board == -1
-        for channel, owner in ((3, player), (4, opponent)):
-            x, y = self.positions[owner]
-            data[channel, y, x] = 1
+        for owner, (x, y) in enumerate(self.positions):
+            data[3 if owner == player else 4, y, x] = 1
         for x, y in self.blocks:
             data[5, y, x] = 1
         data[6].fill(max(0, 1 - self.turn / (self.n ** 2 * 8 + 1)))

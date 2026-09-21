@@ -1,0 +1,10 @@
+{
+  "name": "ATLAS-R Trio",
+  "version": "1.0",
+  "board_size": 15,
+  "players": 3,
+  "source_sha256": "64db1fd8ea4f5fefd5c99ff9f7a13e5377728714f9d8ebce34c1b62b5410227b",
+  "model_sha256": "e494d5bc2a781ed9673fd35ecd25813aa7f798e2d062b02a326ecc4c268f5097",
+  "source": "training\\runs\\atlas3-round1\\snapshot_000016384.zip",
+  "training": "three-player PPO fine-tuning with frozen opponents"
+}

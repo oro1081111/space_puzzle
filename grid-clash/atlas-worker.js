@@ -8,8 +8,9 @@ self.onmessage = async ({data}) => {
     const {board, positions, blocks, turn} = data.state;
     const n=board.length,total=n*n;
     if(![15,30].includes(n)||positions.length<2||positions.length>8)throw new Error('ATLAS-R supports 15/30 boards and 2..8 players');
-    if(!sessions.has(n))sessions.set(n,await ort.InferenceSession.create(n===15?'atlas-r-v1.onnx':'atlas-r-v1-30.onnx', {executionProviders:['wasm']}));
-    const session=sessions.get(n);
+    const model=n===15&&positions.length===3?'atlas-r-3p-v1.onnx':n===15?'atlas-r-v1.onnx':'atlas-r-v1-30.onnx';
+    if(!sessions.has(model))sessions.set(model,await ort.InferenceSession.create(model, {executionProviders:['wasm']}));
+    const session=sessions.get(model);
     const logits=[];
     // Keep the frozen batch-two model: evaluate all players in pairs.
     for(let pair=0;pair<positions.length;pair+=2){

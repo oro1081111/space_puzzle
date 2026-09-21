@@ -44,13 +44,17 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
       aiDirection=p=>actions[p.id]??null;chooseNewTarget=()=>null;
       const advanced=resolveTurn();return {...state(),advanced};
     },
-    atlas(logits){
+    atlas(logits,overrides={}){
       const probabilities=atlasProbabilities(logits.flat());
       // Compute ATLAS before heuristic intentions, exactly as playTurn does.
-      const actions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
-      aiDirection=p=>p.strategy==='atlas'?actions[p.id]:(actions[p.id]=originalAI(p));
-      chooseNewTarget=p=>p.strategy==='atlas'?null:(actions[p.id]=originalTarget(p));
+      const actions=a.map(p=>Object.hasOwn(overrides,p.id)?overrides[p.id]:(p.strategy==='atlas'?atlasChoose(p.id,probabilities):null));
+      aiDirection=p=>Object.hasOwn(overrides,p.id)||p.strategy==='atlas'?actions[p.id]:(actions[p.id]=originalAI(p));
+      chooseNewTarget=p=>Object.hasOwn(overrides,p.id)||p.strategy==='atlas'?null:(actions[p.id]=originalTarget(p));
       const advanced=resolveTurn();return {...state(),advanced,actions,endReason,escape:a.map(p=>p.atlasEscape)};
+    },
+    match3(logits,opponentLogits,seat){
+      const chosen=atlasChoose(seat,atlasProbabilities(logits.flat()));
+      return this.atlas(opponentLogits,{[seat]:chosen});
     },
     play(actions){
       const proposed=actions.map(()=>null);
@@ -87,7 +91,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       const priorSeed=seed;
       try{result=game.advise(msg.player,msg.style);}finally{seed=priorSeed;}
     }else result=msg.op==='reset'?game.reset(msg):
-      msg.op==='capture'?game.capture():msg.op==='atlas'?game.atlas(msg.logits):msg.op==='play'?game.play(msg.actions):game.step(msg.actions);
+      msg.op==='match3'?game.match3(msg.logits,msg.opponent_logits,msg.seat):
+      msg.op==='capture'?game.capture():msg.op==='atlas'?game.atlas(msg.logits,msg.overrides):msg.op==='play'?game.play(msg.actions):game.step(msg.actions);
     process.stdout.write(JSON.stringify(result)+'\n');
   } catch(error) {process.stdout.write(JSON.stringify({error:error.stack})+'\n');}
 });
