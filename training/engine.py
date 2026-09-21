@@ -3,7 +3,7 @@ import math
 import numpy as np
 from scipy.ndimage import label
 
-RULE_VERSION = 'exclusive-reach-cancel-round-v1'
+RULE_VERSION = 'exclusive-reach-stalemate-v2'
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
@@ -29,6 +29,7 @@ class Game:
         self.ended = False
         self.decisions = 0
         self.collisions = 0
+        self.idle_attempts = 0
         self.refresh()
 
     def load(self, state):
@@ -40,6 +41,7 @@ class Game:
         self.turn = state.get('turn', 0)
         self.ended = state.get('ended', False)
         self.decisions = self.collisions = 0
+        self.idle_attempts = state.get('idleAttempts', 0)
         self.refresh()
 
     def refresh(self):
@@ -85,11 +87,14 @@ class Game:
             x, y = self.positions[i]
             proposals.setdefault((x + dx, y + dy), []).append(i)
         self.decisions += 1
+        self.idle_attempts += 1
         contested = [pos for pos, players in proposals.items() if len(players) > 1]
         if contested:
             self.blocks.update(contested)
             self.collisions += 1
+            self.ended = sum(self.scores) == self.n**2-1 or self.idle_attempts >= 2*self.n**2
             return False
+        before = sum(self.scores)
         self.turn += 1
         for (x, y), players in proposals.items():
             player = players[0]
@@ -98,7 +103,9 @@ class Game:
                 self.board[y, x] = player
         self.capture()
         self.blocks.clear()
-        self.ended = not any(self.active) or sum(self.scores) == self.n ** 2 or self.turn > self.n ** 2 * 8
+        if sum(self.scores) > before:
+            self.idle_attempts = 0
+        self.ended = not any(self.active) or sum(self.scores) == self.n ** 2 or self.turn > self.n ** 2 * 8 or self.idle_attempts >= 2*self.n**2
         return True
 
     def observation(self, player):
@@ -118,7 +125,7 @@ class Game:
     def state(self):
         return dict(board=self.board.tolist(), positions=[list(p) for p in self.positions],
                     blocks=[list(p) for p in sorted(self.blocks, key=lambda p:(p[1],p[0]))],
-                    turn=self.turn, ended=bool(self.ended), scores=self.scores, active=self.active)
+                    turn=self.turn, ended=bool(self.ended), scores=self.scores, active=self.active, idleAttempts=self.idle_attempts)
 
 
 def simple_action(game, player, rng, greedy=True):

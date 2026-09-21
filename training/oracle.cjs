@@ -25,7 +25,7 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
   const originalAI=aiDirection, originalTarget=chooseNewTarget;
   const state=()=>({board:g,positions:a.map(p=>[p.x,p.y]),scores:a.map(p=>p.score),
     blocks:[...temporaryBlocks].map(k=>k.split(',').map(Number)).sort((u,v)=>u[1]-v[1]||u[0]-v[0]),
-    turn,ended,active:a.map(p=>canExpand(p))});
+    turn,ended,idleAttempts,active:a.map(p=>canExpand(p))});
   return {
     reset(opts){
       requestedSize=opts.size||30;
@@ -35,7 +35,7 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
         g=opts.board.map(row=>row.slice());n=g.length;
         opts.positions.forEach(([x,y],i)=>{a[i].x=x;a[i].y=y;});
         temporaryBlocks=new Set((opts.blocks||[]).map(([x,y])=>key(x,y)));
-        turn=opts.turn||0;recountScores();
+        turn=opts.turn||0;idleAttempts=opts.idleAttempts||0;recountScores();
       }
       a.forEach((p,i)=>p.strategy=(opts.styles||[])[i]||p.strategy);
       return state();
@@ -43,6 +43,12 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
     step(actions){
       aiDirection=p=>actions[p.id]??null;chooseNewTarget=()=>null;
       const advanced=resolveTurn();return {...state(),advanced};
+    },
+    atlas(logits){
+      const probabilities=atlasProbabilities(logits.flat());
+      const actions=a.map(p=>atlasChoose(p.id,probabilities));
+      aiDirection=p=>actions[p.id];chooseNewTarget=()=>null;
+      const advanced=resolveTurn();return {...state(),advanced,actions,endReason,escape:a.map(p=>p.atlasEscape)};
     },
     play(actions){
       const proposed=actions.map(()=>null);
@@ -79,7 +85,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       const priorSeed=seed;
       try{result=game.advise(msg.player,msg.style);}finally{seed=priorSeed;}
     }else result=msg.op==='reset'?game.reset(msg):
-      msg.op==='capture'?game.capture():msg.op==='play'?game.play(msg.actions):game.step(msg.actions);
+      msg.op==='capture'?game.capture():msg.op==='atlas'?game.atlas(msg.logits):msg.op==='play'?game.play(msg.actions):game.step(msg.actions);
     process.stdout.write(JSON.stringify(result)+'\n');
   } catch(error) {process.stdout.write(JSON.stringify({error:error.stack})+'\n');}
 });

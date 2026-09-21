@@ -40,7 +40,8 @@ const game = new Function('document', core + `
     pass(id,x,y){return passable(a[id],x,y);},
     expandable(id){return canExpand(a[id]);},
     candidates(id){return frontierCandidates(a[id]);},
-    state(){return structuredClone({turn,g,a,occ,ended,blocks:[...temporaryBlocks]});},
+    idle(value){idleAttempts=value;},
+    state(){return structuredClone({turn,g,a,occ,ended,idleAttempts,endReason,blocks:[...temporaryBlocks]});},
     hint(){return $('#joyhint').textContent;}
   };
 `)(document);
@@ -181,3 +182,37 @@ saved=game.state();
 assert.equal(game.capture(),0);
 assert.deepEqual(game.state(),saved);
 console.log('Exclusive reachability, large/equal regions, shared/unreachable cells, temporary bans and AI estimates passed.');
+
+// The final empty square contested simultaneously is neutral, not awarded by order.
+game.setup([[0,1],[2,1]],false);
+game.board([[0,0,1],[0,-1,1],[0,1,1]]);
+game.choices({0:1,1:3});game.step();s=game.state();
+assert.equal(s.ended,true);assert.equal(s.turn,0);
+assert.deepEqual(s.a.map(p=>p.score),[4,4]);assert.equal(s.g[1][1],-1);
+assert.match(s.endReason,/最後一格/);
+
+// Two blanks: ordinary collision must NOT end the game or alter scores.
+game.setup([[0,1],[2,1]],false);
+game.board([[0,-1,1],[0,-1,1],[0,1,1]]);
+game.choices({0:1,1:3});game.step();
+assert.equal(game.state().ended,false);assert.equal(game.state().idleAttempts,1);
+
+// Collisions count towards the no-progress safety limit, but rejected clicks do not.
+game.setup([[0,1],[2,1]]);
+game.board([[0,-1,1],[0,-1,1],[0,1,1]]);game.idle(17);
+game.choices({1:3});game.step(3);assert.equal(game.state().idleAttempts,17);
+game.step(1);assert.equal(game.state().ended,true);assert.match(game.state().endReason,/僵持/);
+
+// Progress on the threshold attempt resets the counter instead of ending early.
+game.setup([[0,1],[2,1]]);
+game.board([[-1,-1,-1],[0,-1,1],[-1,-1,-1]]);game.idle(17);
+game.choices({1:2});game.step(0);
+assert.equal(game.state().idleAttempts,0);assert.equal(game.state().ended,false);
+
+// A permanently trapped human can wait while the other player finishes.
+game.setup([[0,0],[1,1]]);
+game.board([[0,1,1],[1,1,-1],[1,1,1]]);
+game.choices({1:1});game.step(1);
+assert.equal(game.state().ended,true);assert.equal(game.state().g[1][2],1);
+assert.deepEqual([game.state().a[0].x,game.state().a[0].y],[0,0]);
+console.log('Last-square collision, non-terminal collision, no-progress safety, reset on gain, and trapped-human checks passed.');

@@ -93,12 +93,13 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="list" class="list"></div>
-<div id="atlasStatus" class="note" role="status">ATLAS-R｜全域競速 v1.0：限 2 人；15×15 已評估、30×30 實驗性。首次使用需下載模型；運算在你的瀏覽器完成。</div>
+<div id="atlasStatus" class="note" role="status">ATLAS-R｜全域競速 v1.1：限 2 人；30×30 實驗性。循環脫困修正版，首次使用需下載模型；運算在你的瀏覽器完成。</div>
 <div class="note">
-棋盤可選 15×15 或 30×30。ATLAS-R v1.0 使用神經網路＋同時動作空間搜尋，限雙人模式；30×30 沿用 15×15 權重，屬實驗性，尚未完成棋力評估。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
+棋盤可選 15×15 或 30×30。ATLAS-R v1.1 使用神經網路＋同時動作空間搜尋，新增重複走位脫困，限雙人模式；30×30 沿用 15×15 權重，屬實驗性，尚未完成棋力評估。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
 每回合移動完成後，從各玩家的棋子出發，沿空白格與自己的領地判斷可到達範圍。空白格只有一人能到達就歸該玩家；多人能到達或無人能到達則保持空白。此判定忽略暫時禁止格，不受區域大小影響，也不覆蓋既有領地。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
-多人搶同一空格時，整個回合取消，所有角色留在原位。搶格位置顯示紅色叉號，下一個成功結算的回合禁止任何人進入，結算後解除；再次搶格會累積禁止格。若玩家所有可走方向都被暫時禁止，點擊棋盤可原地等待一回合。
+多人搶同一空格時，整個回合取消，所有角色留在原位。搶格位置顯示紅色叉號，下一個成功結算的回合禁止任何人進入，結算後解除；再次搶格會累積禁止格。若玩家完全無路可走，點擊棋盤可原地等待一回合。
+例外：棋盤只剩一格空白且多人同時搶該格，直接結束，該格不計分。連續 2×棋盤格數次有效行動（15×15 為 450 次、30×30 為 1800 次，含取消的搶格）都沒有新增領地時，依既有領地結算；取得新領地即重置計數，非法點擊不計次。這是僵持安全上限，不表示所有空格都已不可達。
 </div>
 </div></div>
 
@@ -111,11 +112,12 @@ const STRATS=[
  ['apex','APEX-R｜自適應獵場'],
  ['bastion','BASTION-R｜困敵封鎖'],
  ['sweep','SWEEP-R｜邊界大圈'],
- ['atlas','ATLAS-R｜全域競速 v1.0（限2人）']
+ ['atlas','ATLAS-R｜全域競速 v1.1（限2人）']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
 let temporaryBlocks=new Set();
+let idleAttempts=0,endReason='';
 let strategyPrefs=Array.from({length:8},(_,i)=>i===1?'atlas':STRATS[i%3][0]);
 let atlasWorker=null,atlasPending=null,atlasSequence=0,atlasActions=null;
 
@@ -283,7 +285,7 @@ function pathToTarget(p,tx,ty){
     const cur=q[qi];
     for(let d=0;d<4;d++){
       const nx=cur.x+D[d][0],ny=cur.y+D[d][1];
-      if(!inside(nx,ny))continue;
+      if(!inside(nx,ny)||temporaryBlocks.has(key(nx,ny)))continue;
       const first=cur.first===null?d:cur.first;
       if(nx===tx&&ny===ty)return {first,dist:cur.dist+1};
       if(g[ny][nx]!==p.id)continue;
@@ -845,6 +847,7 @@ function place(x,y){
 
 function init(){
   cancelAtlas();
+  idleAttempts=0;endReason='';
   stop();run=false;ended=false;turn=0;occ=0;stateSeen=new Map();globalPanic=0;
   temporaryBlocks.clear();
   $('#overlay').classList.remove('show');
@@ -860,13 +863,13 @@ function init(){
     const p={
       id:i,x,y,dir,last:dir,score:1,active:true,h:humanMode&&i===0,
       strategy:strategyPrefs[i]==='atlas'&&k!==2?'apex':(strategyPrefs[i]||STRATS[i%3][0]),color:COL[i],
-      commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map(),loopPlan:[],loopPos:0,loopCooldown:0
+      commit:null,enclosurePlan:null,planBlocked:0,noGain:0,panic:0,visits:new Map(),recent:[],blocked:new Map(),loopPlan:[],loopPos:0,loopCooldown:0,atlasEscape:false,atlasTarget:null,atlasAvoid:null
     };
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
   }
   renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊或長按棋盤四側來移動';
-  $('#atlasStatus').textContent='ATLAS-R v1.0：限 2 人；15×15 已評估、30×30 實驗性。首次使用需下載模型。';
+  $('#atlasStatus').textContent='ATLAS-R v1.1：限 2 人；循環脫困修正版，30×30 實驗性。首次使用需下載模型。';
 }
 
 function recordLoopState(){
@@ -888,7 +891,7 @@ function resolveTurn(hdir=null){
   if(humanMode&&hdir===null)return false;
 
   const human=a.find(p=>p.h);
-  const humanWait=humanMode&&human&&temporaryBlocks.size>0&&legalDirs(human).length===0;
+  const humanWait=humanMode&&human&&legalDirs(human).length===0;
   if(humanMode&&human&&!humanWait){
     const hx=human.x+D[hdir][0],hy=human.y+D[hdir][1];
     if(!passable(human,hx,hy)){
@@ -899,6 +902,8 @@ function resolveTurn(hdir=null){
 
   const previousPlayers=structuredClone(a);
   const before=a.map(p=>p.score);
+  const beforeOcc=occ;
+  idleAttempts++;
   const P=new Map();
 
   for(const p of a){
@@ -909,7 +914,7 @@ function resolveTurn(hdir=null){
     let d=p.h?hdir:aiDirection(p);
     const legal=legalDirs(p);
     if(d===null||d===undefined||!legal.includes(d)){
-      if(!p.h){
+      if(!p.h&&p.strategy!=='atlas'){
         p.commit=null;
         p.loopPlan=[];
         p.loopPos=0;
@@ -932,10 +937,15 @@ function resolveTurn(hdir=null){
     for(const p of a)if(!p.h){
       p.commit=null;p.enclosurePlan=null;p.loopPlan=[];p.loopPos=0;
     }
+    for(const [dest,players] of collisions)for(const {p} of players){
+      a[p.id].atlasAvoid=dest;a[p.id].atlasTarget=null;
+    }
     draw();
     $('#joyhint').textContent=human&&legalDirs(a[human.id]).length===0
       ?'搶格！回合取消；所有方向暫時受阻，點擊棋盤等待一回合'
       :'搶格！回合取消，紅叉格暫時禁止進入，請換方向';
+    if(occ===n*n-1)finish('最後一格同時搶格；該格保持空白');
+    else if(idleAttempts>=2*n*n)finish('連續 '+idleAttempts+' 次有效行動無新增領地，僵持結束');
     return false;
   }
 
@@ -965,6 +975,8 @@ function resolveTurn(hdir=null){
   for(const p of a){
     if(p.score>before[p.id]){
       p.noGain=0;
+      p.atlasEscape=false;p.atlasTarget=null;p.atlasAvoid=null;
+      if(p.strategy==='atlas')p.recent=[];
       p.panic=Math.max(0,p.panic-1);
       if(!p.h&&p.score-before[p.id]>=4){
         p.loopPlan=[];
@@ -985,11 +997,15 @@ function resolveTurn(hdir=null){
   }
 
   recordLoopState();
+  if(occ>beforeOcc)idleAttempts=0;
   draw();updateShare();
 
 
-  if(a.every(p=>!p.active)||occ>=n*n||turn>n*n*8)finish();
-  if(humanMode)$('#joyhint').textContent=humanWait?'已原地等待一回合，暫時禁止已解除':'已完成一回合';
+  if(occ>=n*n)finish('棋盤已填滿');
+  else if(a.every(p=>!p.active))finish('所有玩家均無法再取得空白格');
+  else if(idleAttempts>=2*n*n)finish('連續 '+idleAttempts+' 次有效行動無新增領地，僵持結束');
+  else if(turn>n*n*8)finish('達到回合上限');
+  if(humanMode&&!ended)$('#joyhint').textContent=humanWait?'已原地等待一回合；暫時禁止已解除，其他角色可繼續行動':'已完成一回合';
   return true;
 }
 
@@ -1042,17 +1058,34 @@ function atlasBranchValue(player,actions){
     g=g.map(row=>row.slice());a=a.map(p=>({...p}));temporaryBlocks=new Set(temporaryBlocks);
     const proposals=actions.map((d,i)=>d===null?null:[a[i].x+D[d][0],a[i].y+D[d][1]]);
     if(proposals[0]&&proposals[1]&&key(...proposals[0])===key(...proposals[1])){
-      return atlasRaceValue(player); // Cancelled turn: territory and heads do not change.
+      return occ===n*n-1||idleAttempts+1>=2*n*n?a[player].score-a[1-player].score:atlasRaceValue(player);
     }
     turn++;
     proposals.forEach((pos,i)=>{if(pos){[a[i].x,a[i].y]=pos;g[pos[1]][pos[0]]=i;}});
     resolveAllCaptures();recountScores();temporaryBlocks.clear();
+    if(occ===saved.occ&&idleAttempts+1>=2*n*n)return a[player].score-a[1-player].score;
     return atlasRaceValue(player);
   }finally{({g,a,turn,occ,temporaryBlocks}=saved);}
 }
 
 function atlasChoose(player,probabilities){
+  const p=a[player];
   const legal=canExpand(a[player])?legalDirs(a[player]):[];
+  if(!legal.length)return null;
+  if(p.noGain>=4&&(p.recent.filter(k=>k===key(p.x,p.y)).length>=3||p.noGain>=2*n))p.atlasEscape=true;
+  if(p.atlasEscape){
+    const candidates=frontierCandidates(p);
+    if(!candidates.length)return null; // Wait out temporary bans, never choose an illegal path.
+    let target=candidates.find(c=>key(c.x,c.y)===p.atlasTarget);
+    if(!target){
+      const alternatives=candidates.filter(c=>key(c.x,c.y)!==p.atlasAvoid);
+      const choices=alternatives.length?alternatives:candidates;
+      // Stable target until gain; opposite tie ordering reduces mirror collisions.
+      choices.sort((u,v)=>u.dist-v.dist||((player%2?-1:1)*((u.y*n+u.x)-(v.y*n+v.x))));
+      target=choices[0];p.atlasTarget=key(target.x,target.y);
+    }
+    return target.first;
+  }
   if(legal.length<2)return legal[0]??null;
   const enemy=1-player,replies=canExpand(a[enemy])?legalDirs(a[enemy]):[];
   if(!replies.length)replies.push(null);
@@ -1074,7 +1107,7 @@ async function playTurn(hdir=null){
   if(!run||ended||atlasPending)return false;
   if(!a.some(p=>!p.h&&p.strategy==='atlas'))return resolveTurn(hdir);
   const human=a.find(p=>p.h);
-  if(humanMode&&(hdir===null||(!legalDirs(human).includes(hdir)&&!(temporaryBlocks.size&&legalDirs(human).length===0))))return false;
+  if(humanMode&&(hdir===null||(!legalDirs(human).includes(hdir)&&legalDirs(human).length!==0)))return false;
   const id=++atlasSequence;
   let timeout;
   $('#atlasStatus').textContent='ATLAS-R 思考中（首次使用會下載模型）…';
@@ -1100,7 +1133,7 @@ async function playTurn(hdir=null){
     const probabilities=atlasProbabilities(logits);
     atlasActions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
     const result=resolveTurn(hdir);
-    $('#atlasStatus').textContent='ATLAS-R｜全域競速 v1.0 · '+n+'×'+n+'／2 人'+(n===30?'（實驗性，尚未完成棋力評估）':'')+' · 瀏覽器本機運算';
+    $('#atlasStatus').textContent='ATLAS-R｜全域競速 v1.1 · '+n+'×'+n+'／2 人'+(n===30?'（實驗性，尚未完成棋力評估）':'')+' · 瀏覽器本機運算';
     return result;
   }catch(error){
     if(id!==atlasSequence)return false;
@@ -1120,11 +1153,12 @@ function schedule(){
   stop();
   if(run&&!ended&&!humanMode)timer=setInterval(()=>playTurn(null),1000/steps);
 }
-function finish(){
+function finish(reason='遊戲結束'){
+  endReason=reason;
   ended=true;run=false;stop();
   const m=Math.max(...a.map(p=>p.score)),w=a.filter(p=>p.score===m);
   $('#winner').textContent=w.length===1?name(w[0])+' 獲勝':'平手';
-  $('#result').textContent=w.map(name).join('、')+'：'+m+' 格（'+(m/n/n*100).toFixed(1)+'%）';
+  $('#result').textContent=w.map(name).join('、')+'：'+m+' 格（'+(m/n/n*100).toFixed(1)+'%）。'+reason+'；剩餘空白不計分。';
   $('#overlay').classList.add('show');
 }
 function renderList(){

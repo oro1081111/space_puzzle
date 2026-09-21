@@ -13,7 +13,7 @@ const server=http.createServer((req,res)=>{
     res.setHeader('Content-Type',target.endsWith('.js')?'text/javascript':target.endsWith('.html')?'text/html; charset=utf-8':'application/octet-stream');
     let content=fs.readFileSync(target);
     if(target.endsWith('index.html'))content=content.toString().replace('init();setTimeout(resize,0);',
-      "window.gridTest=()=>({turn,n,run,positions:a.map(p=>[p.x,p.y]),pending:!!atlasPending});init();setTimeout(resize,0);");
+      "window.gridTest=()=>({turn,n,run,positions:a.map(p=>[p.x,p.y]),pending:!!atlasPending});window.gridSelfPlay=async size=>{$('#size').value=String(size);$('#count').value='2';$('#human').checked=false;strategyPrefs[0]=strategyPrefs[1]='atlas';init();run=true;let attempts=0;while(!ended&&attempts++<n*n*4)await playTurn();return {turn,ended,endReason,occ,attempts};};init();setTimeout(resize,0);");
     res.end(content);
   }catch{res.writeHead(404).end();}
 });
@@ -64,6 +64,12 @@ const server=http.createServer((req,res)=>{
     await page.click('#start'); // Discard pending results when changing game.
     await page.selectOption('#size','30');
     await page.screenshot({path:path.join(root,'training/runs/atlas-browser.png'),fullPage:true});
+    for(const size of [15,30]){
+      const result=await page.evaluate(size=>gridSelfPlay(size),size);
+      assert(result.ended);assert.equal(result.occ,size*size);
+      console.log('Full browser ATLAS self-play '+size+': '+JSON.stringify(result));
+    }
+    await page.selectOption('#size','30');
     await page.uncheck('#human');
     await page.evaluate(()=>{
       window.Worker=class {

@@ -112,6 +112,14 @@ def verify(games=24, steps=400, size=30):
         game.step([2,0])
         compare(game,oracle.call(op='step',actions=[2,0]))
         assert game.ended
+        # New termination rules must agree even on a cancelled (non-advancing) turn.
+        for board, idle in [([[0,0,1],[0,-1,1],[0,1,1]],0),
+                            ([[0,-1,1],[0,-1,1],[0,1,1]],17)]:
+            state=dict(board=board,positions=[[0,1],[2,1]],idleAttempts=idle)
+            game=Game(size=3);game.load(state)
+            oracle.call(op='reset',count=2,**state)
+            game.step([1,3]);compare(game,oracle.call(op='step',actions=[1,3]))
+            assert game.ended and game.turn==0
     finally:
         oracle.close()
     return dict(passed=True, board_size=size,comparisons=comparisons, random_collisions=collisions,completed_games=completed_games,
