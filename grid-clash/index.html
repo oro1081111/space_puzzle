@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Grid Clash</title>
 <style>
 *{box-sizing:border-box}
@@ -24,7 +24,7 @@ select{padding:10px;border:1px solid #d8d0c4;border-radius:10px;background:#fff;
 button{border:0;border-radius:10px;padding:11px 8px;font-size:14px;font-weight:700;background:#e8e1d6;color:#242424}
 button.main{background:#292929;color:#fff}
 button:disabled{opacity:.42}
-.boardbox{position:relative;width:100%;aspect-ratio:1/1;background:#fbf7ef;border:1px solid #ddd4c7;border-radius:12px;overflow:hidden;touch-action:none}
+.boardbox{position:relative;width:100%;aspect-ratio:1/1;background:#fbf7ef;border:1px solid #ddd4c7;border-radius:12px;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 canvas{display:block;width:100%;height:100%}
 .sharewrap{margin-top:10px}
 .sharebar{height:18px;width:100%;display:flex;overflow:hidden;border-radius:999px;background:#e7dfd4;border:1px solid #d4cabd}
@@ -88,15 +88,15 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="joysection" class="joysection">
- <div class="joytitle">玩家模式：點擊棋盤的上／下／左／右側，即可往對應方向移動 1 格；每次玩家行動，所有 AI 同步移動 1 格。</div>
- <div id="joyhint" class="joyhint">點擊棋盤四側來移動</div>
+ <div class="joytitle">玩家模式：點一下棋盤上／下／左／右側移動 1 格；持續按住即可往該方向連續移動。每移動 1 格，所有 AI 同步行動 1 步。</div>
+ <div id="joyhint" class="joyhint">點擊或長按棋盤四側來移動</div>
 </div>
 
 <div id="list" class="list"></div>
 <div class="note">
 目前固定 30×30，三種 AI 已改為圈地強化版：APEX-X 圈地預判、RAIDER-X 封口搶線、FRONTIER-X 邊界包圍。AI 會把「完成封閉」視為遠高於普通單格擴張的收益，並主動利用棋盤邊界形成大區域。
 圈地判定會在每一步所有角色完成移動後，立即重新檢查所有玩家；即使只是其他玩家剛離開已封閉區域，也會立刻觸發填色。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置與重複碰撞；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
-玩家模式下沒有獨立的 AI 計時：點擊棋盤上／下／左／右側即可移動 1 格，玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
+玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 </div>
 </div></div>
 
@@ -771,7 +771,7 @@ function init(){
     p.visits.set(key(x,y),1);
     a.push(p);g[y][x]=i;occ++;
   }
-  renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊棋盤四側來移動';
+  renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊或長按棋盤四側來移動';
 }
 
 function recordLoopState(){
@@ -896,7 +896,7 @@ function resolveTurn(hdir=null){
 function start(){
   init();run=true;
   if(!humanMode)schedule();
-  else $('#joyhint').textContent='點擊棋盤四側來移動';
+  else $('#joyhint').textContent='點擊或長按棋盤四側來移動';
 }
 function stop(){if(timer){clearInterval(timer);timer=null}}
 function schedule(){
@@ -913,7 +913,7 @@ function finish(){
 function renderList(){
   $('#list').innerHTML=a.map(p=>{
     const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+'>'+t+'</option>').join('');
-    return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家搖桿操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div></div>';
+    return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家點擊／長按操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div></div>';
   }).join('');
 }
 function updateShare(){
@@ -968,7 +968,7 @@ $('#pause').onclick=()=>{
   $('#pause').textContent=run?'暫停':'繼續';
   if(!humanMode){run?schedule():stop()}
   else{
-    $('#joyhint').textContent=run?'已繼續，點擊棋盤四側即可移動':'已暫停';
+    $('#joyhint').textContent=run?'已繼續，點擊或長按棋盤四側即可移動':'已暫停';
   }
 };
 $('#step').onclick=()=>{if(ended||humanMode)return;run=true;stop();resolveTurn(null);run=false;$('#pause').textContent='繼續'};
@@ -989,6 +989,14 @@ $('#list').onchange=e=>{
 };
 
 const boardbox=document.querySelector('.boardbox');
+let boardPointerId=null;
+let boardHeld=false;
+let boardDir=null;
+let holdDelayTimer=null;
+let holdRepeatTimer=null;
+
+const HOLD_DELAY_MS=240;
+const HOLD_REPEAT_MS=120;
 
 function boardDirectionFromPointer(e){
   const r=boardbox.getBoundingClientRect();
@@ -999,27 +1007,94 @@ function boardDirectionFromPointer(e){
   const dx=x-cx;
   const dy=y-cy;
 
-  // Divide the square into four triangular zones radiating from the center.
-  // The side with the greatest directional displacement determines movement.
+  // Split the board into four triangular zones from the center.
   if(Math.abs(dx)>Math.abs(dy))return dx>0?1:3;
   return dy>0?2:0;
 }
 
-boardbox.addEventListener('pointerup',e=>{
-  if(!humanMode||!run||ended)return;
-  // Ignore clicks on the result overlay/buttons.
-  if(e.target.closest('.overlay'))return;
+function stopBoardHold(){
+  boardHeld=false;
+  boardPointerId=null;
+  boardDir=null;
+  if(holdDelayTimer){clearTimeout(holdDelayTimer);holdDelayTimer=null}
+  if(holdRepeatTimer){clearInterval(holdRepeatTimer);holdRepeatTimer=null}
+}
 
-  const d=boardDirectionFromPointer(e);
+function performHumanBoardStep(d){
+  if(!humanMode||!run||ended||d===null)return false;
   const labels=['上','右','下','左'];
   const moved=resolveTurn(d);
 
   if(moved){
-    $('#joyhint').textContent='已向'+labels[d]+'移動 1 格';
+    $('#joyhint').textContent='向'+labels[d]+'移動';
   }else{
     $('#joyhint').textContent='這個方向被擋住，AI 不會行動';
   }
+  return moved;
+}
+
+function beginRepeat(){
+  if(!boardHeld||boardDir===null||!humanMode||!run||ended)return;
+  if(holdRepeatTimer)clearInterval(holdRepeatTimer);
+  holdRepeatTimer=setInterval(()=>{
+    if(!boardHeld||boardDir===null||!humanMode||!run||ended){
+      stopBoardHold();
+      return;
+    }
+    performHumanBoardStep(boardDir);
+  },HOLD_REPEAT_MS);
+}
+
+boardbox.addEventListener('pointerdown',e=>{
+  if(!humanMode||!run||ended)return;
+  if(e.target.closest('.overlay'))return;
+
+  e.preventDefault();
+  stopBoardHold();
+
+  boardHeld=true;
+  boardPointerId=e.pointerId;
+  boardDir=boardDirectionFromPointer(e);
+
+  try{boardbox.setPointerCapture(e.pointerId)}catch(_){}
+
+  // A normal tap still moves exactly one square.
+  performHumanBoardStep(boardDir);
+
+  // Only start continuous movement after a short hold delay.
+  holdDelayTimer=setTimeout(beginRepeat,HOLD_DELAY_MS);
 });
+
+boardbox.addEventListener('pointermove',e=>{
+  if(!boardHeld||e.pointerId!==boardPointerId)return;
+  e.preventDefault();
+
+  const newDir=boardDirectionFromPointer(e);
+  if(newDir!==boardDir){
+    boardDir=newDir;
+    $('#joyhint').textContent='長按方向已切換';
+  }
+});
+
+function endBoardPointer(e){
+  if(boardPointerId!==null&&e.pointerId!==undefined&&e.pointerId!==boardPointerId)return;
+  e.preventDefault();
+  stopBoardHold();
+}
+
+boardbox.addEventListener('pointerup',endBoardPointer);
+boardbox.addEventListener('pointercancel',endBoardPointer);
+boardbox.addEventListener('lostpointercapture',()=>stopBoardHold());
+
+// Extra Safari/iOS protections against double-tap zoom, callout, and gesture zoom.
+boardbox.addEventListener('dblclick',e=>e.preventDefault());
+boardbox.addEventListener('contextmenu',e=>e.preventDefault());
+boardbox.addEventListener('touchstart',e=>{
+  if(humanMode&&run&&!ended&&!e.target.closest('.overlay'))e.preventDefault();
+},{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturechange',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gestureend',e=>e.preventDefault(),{passive:false});
 
 addEventListener('resize',resize);
 init();setTimeout(resize,0);
