@@ -17,7 +17,7 @@ const game=new Function('document',core+`
       g=structuredClone(state.board);turn=state.turn;ended=state.ended;
       a.forEach((p,i)=>{[p.x,p.y]=state.positions[i];});
       temporaryBlocks=new Set(state.blocks.map(pos=>key(...pos)));recountScores();},
-    snapshot(){return JSON.stringify({g,a,turn,occ,blocks:[...temporaryBlocks]});},
+    snapshot(){return JSON.stringify({g,a,turn,occ,blocks:[...temporaryBlocks],tailHistory});},
     actions(logits){const probs=atlasProbabilities(logits.flat());return a.map(p=>atlasChoose(p.id,probs));},
     size(size,count){$('#size').value=String(size);$('#count').value=String(count);init();return {n,strategies:a.map(p=>p.strategy),options:$('#list').innerHTML};}
   };

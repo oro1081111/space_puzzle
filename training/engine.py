@@ -1,9 +1,10 @@
 """Square simultaneous-move engine; permanent reachability ignores entry bans."""
 import math
+import json
 import numpy as np
 from scipy.ndimage import label
 
-RULE_VERSION = 'exclusive-reach-stalemate-v2'
+RULE_VERSION = 'exclusive-reach-endgame-cycle-v3'
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 
 
@@ -30,6 +31,7 @@ class Game:
         self.decisions = 0
         self.collisions = 0
         self.idle_attempts = 0
+        self.tail_history = []
         self.refresh()
 
     def load(self, state):
@@ -42,6 +44,7 @@ class Game:
         self.ended = state.get('ended', False)
         self.decisions = self.collisions = 0
         self.idle_attempts = state.get('idleAttempts', 0)
+        self.tail_history = [entry[:] for entry in state.get('tailHistory', [])]
         self.refresh()
 
     def refresh(self):
@@ -76,6 +79,19 @@ class Game:
                          and self.board[ny, nx] in (-1, player))
         return result
 
+    def repeated_endgame_clash(self, collided, progress=False):
+        if progress or not 2 <= self.n**2-sum(self.scores) <= 4:
+            self.tail_history=[]
+            return False
+        signature=json.dumps([self.positions,sorted(self.blocks,key=lambda p:(p[1],p[0]))],separators=(',',':'))
+        self.tail_history.append([signature,collided])
+        self.tail_history=self.tail_history[-96:]
+        for period in range(1,min(32,len(self.tail_history)//3)+1):
+            cycle=self.tail_history[-period:]
+            if any(entry[1] for entry in cycle) and cycle==self.tail_history[-2*period:-period]==self.tail_history[-3*period:-2*period]:
+                return True
+        return False
+
     def step(self, actions):
         if self.ended:
             return False
@@ -92,7 +108,7 @@ class Game:
         if contested:
             self.blocks.update(contested)
             self.collisions += 1
-            self.ended = sum(self.scores) == self.n**2-1 or self.idle_attempts >= 2*self.n**2
+            self.ended = sum(self.scores) == self.n**2-1 or self.repeated_endgame_clash(True) or self.idle_attempts >= 2*self.n**2
             return False
         before = sum(self.scores)
         self.turn += 1
@@ -105,7 +121,8 @@ class Game:
         self.blocks.clear()
         if sum(self.scores) > before:
             self.idle_attempts = 0
-        self.ended = not any(self.active) or sum(self.scores) == self.n ** 2 or self.turn > self.n ** 2 * 8 or self.idle_attempts >= 2*self.n**2
+        repeated=self.repeated_endgame_clash(False,sum(self.scores)>before)
+        self.ended = not any(self.active) or sum(self.scores) == self.n ** 2 or repeated or self.turn > self.n ** 2 * 8 or self.idle_attempts >= 2*self.n**2
         return True
 
     def observation(self, player):
@@ -125,7 +142,7 @@ class Game:
     def state(self):
         return dict(board=self.board.tolist(), positions=[list(p) for p in self.positions],
                     blocks=[list(p) for p in sorted(self.blocks, key=lambda p:(p[1],p[0]))],
-                    turn=self.turn, ended=bool(self.ended), scores=self.scores, active=self.active, idleAttempts=self.idle_attempts)
+                    turn=self.turn, ended=bool(self.ended), scores=self.scores, active=self.active, idleAttempts=self.idle_attempts,tailHistory=self.tail_history)
 
 
 def simple_action(game, player, rng, greedy=True):

@@ -41,7 +41,8 @@ const game = new Function('document', core + `
     expandable(id){return canExpand(a[id]);},
     candidates(id){return frontierCandidates(a[id]);},
     idle(value){idleAttempts=value;},
-    state(){return structuredClone({turn,g,a,occ,ended,idleAttempts,endReason,blocks:[...temporaryBlocks]});},
+    tail(collided,progress=false){return repeatedEndgameClash(collided,progress);},
+    state(){return structuredClone({turn,g,a,occ,ended,idleAttempts,endReason,tailHistory,blocks:[...temporaryBlocks]});},
     hint(){return $('#joyhint').textContent;}
   };
 `)(document);
@@ -216,3 +217,28 @@ game.choices({1:1});game.step(1);
 assert.equal(game.state().ended,true);assert.equal(game.state().g[1][2],1);
 assert.deepEqual([game.state().a[0].x,game.state().a[0].y],[0,0]);
 console.log('Last-square collision, non-terminal collision, no-progress safety, reset on gain, and trapped-human checks passed.');
+
+// Alternate two contested cells: collide, move down, collide, move up.
+game.setup([[0,0],[2,0]],false);
+game.board([[0,-1,1],[0,-1,1],[0,0,1]]);
+const cycle=[[1,3],[2,2],[1,3],[0,0]];
+for(let i=0;i<12;i++){
+  game.choices({0:cycle[i%4][0],1:cycle[i%4][1]});game.step();
+  assert.equal(game.state().ended,i===11,'Only three COMPLETE identical cycles end play');
+}
+assert.match(game.state().endReason,/尾盤重複爭奪/);
+assert.deepEqual(game.state().a.map(p=>p.score),[4,3]);
+assert.equal(game.state().idleAttempts,12);
+
+// Repeated positions without any collision do not trigger the new rule.
+game.restart();game.setup([[0,0],[2,0]],false);
+game.board([[0,-1,1],[0,-1,1],[0,0,1]]);
+for(let i=0;i<20;i++)assert.equal(game.tail(false),false);
+// Progress clears history, as does leaving the 2..4-cell tail-game range.
+assert.equal(game.tail(true,true),false);assert.equal(game.state().tailHistory.length,0);
+assert.equal(game.tail(true),false);assert.equal(game.tail(true),false);
+game.blocks([[1,0]]);assert.equal(game.tail(true),false,'Different entry bans are different states');
+game.board([[0,-1,1],[-1,-1,-1],[-1,0,1]]);
+assert.equal(game.tail(true),false);assert.equal(game.state().tailHistory.length,0);
+game.restart();assert.equal(game.state().tailHistory.length,0);
+console.log('Exact three-cycle tail clash, no-collision exclusion, block identity, progress and restart resets passed.');
