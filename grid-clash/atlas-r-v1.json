@@ -1,0 +1,15 @@
+{
+  "name": "ATLAS-R｜全域競速",
+  "version": "1.0",
+  "id": "atlas-r-15x15-2p-v1.0",
+  "board_size": 15,
+  "players": 2,
+  "model_sha256": "b0d2675b080f7efd2b896c0167475bb71ac5675a55a7caa656eaa249321f41ed",
+  "source_sha256": "ff89c359922f6c2e3292270ee26aeebe1e2609b5ea6e9383b95bd2c1fc6a6db4",
+  "search": {
+    "depth": 1,
+    "expected": 0.75,
+    "worst": 0.25,
+    "prior": 0.5
+  }
+}
