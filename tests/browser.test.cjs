@@ -66,7 +66,7 @@ const server=http.createServer((req,res)=>{
     console.log('Trio WASM parity and switching back to frozen two-player model passed.');
     const trioGame=await page.evaluate(()=>gridSelfPlay(15,3));
     assert(trioGame.ended);assert(trioGame.occ>=221);
-    assert((await page.locator('#atlasStatus').textContent()).includes('Trio v1.1'));
+    assert((await page.locator('#atlasStatus').textContent()).includes('Route v2'));
     console.log('Trio full self-play: '+JSON.stringify(trioGame));
     for(const size of ['15','30'])for(let count=3;count<=8;count++){
       await page.selectOption('#size',size);await page.selectOption('#count',String(count));

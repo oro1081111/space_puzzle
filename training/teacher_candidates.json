@@ -1,0 +1,27 @@
+{
+  "experimental": true,
+  "release_approved": false,
+  "count": 3,
+  "route15_v3": {
+    "size": 15,
+    "weights": {
+      "raceCost": 5.371, "topology": 1, "cuts": 1, "lengthPower": 1,
+      "loopDepth": 16, "loopArea": 300, "loopEff": 48.026,
+      "trapLock": 210.609, "loopLen": 1.217, "beamRace": 2,
+      "turnBias": 4, "bbox": 3, "trap": 3.314, "edgePlan": 145.04,
+      "scaledPhase": 0, "avoidClash": 1, "race": 37.265,
+      "enemy": 12.757, "space": 7.323, "contest": 125.133, "dist": 0.884
+    }
+  },
+  "route30_v4": {
+    "size": 30,
+    "weights": {
+      "raceCost": 2.014, "loopDepth": 28, "loopEff": 108.265,
+      "trap": 2.039, "trapLock": 1481.465, "loopLen": 0.677,
+      "loopArea": 35.539, "edgePlan": 29.854, "topology": 1,
+      "beamRace": 2, "turnBias": -4, "bbox": 1, "lengthPower": 0.5,
+      "scaledPhase": 0, "directionBias": 2, "avoidClash": 0,
+      "cap": 359.819, "race": 31.769, "enemy": 12.892, "space": 18.675
+    }
+  }
+}

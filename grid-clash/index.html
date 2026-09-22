@@ -93,9 +93,10 @@ canvas{display:block;width:100%;height:100%}
 </div>
 
 <div id="list" class="list"></div>
-<div id="atlasStatus" class="note" role="status">ATLAS-R：15×15 三人局使用 Trio v1.1（多步圈地＋完整聯合動作搜尋）；其他模式維持原版。首次使用需下載模型；運算在你的瀏覽器完成。</div>
+<div id="atlasStatus" class="note" role="status">ATLAS-R：15×15 三人局使用 Route v2（訓練路線策略）；其他模式維持原版。運算在你的瀏覽器完成。</div>
 <div class="note">
-棋盤可選 15×15 或 30×30。ATLAS-R 使用神經網路＋同時動作空間搜尋，支援 2～8 人並保留重複走位脫困。15×15 三人局使用 Trio v1.1：保留三人權重、加入多步圈地規劃，反應式搜尋完整列舉兩位對手的合法動作組合；不保證獲勝。雙人維持 v1.1。四人以上與 30×30 仍沿用雙人權重與原搜尋，屬實驗性擴充。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
+棋盤可選 15×15 或 30×30。ATLAS-R 支援 2～8 人。15×15 三人局使用 Route v2：經對戰訓練的路線評分與短開局策略，於獨立 Worker 本機運算，不需下載神經網路模型；不保證每局獲勝。雙人維持神經網路＋同時動作搜尋 v1.1。四人以上與 30×30 仍沿用原模型與搜尋，屬實驗性擴充。APEX-R 偏均衡、BASTION-R 偏困敵、SWEEP-R 偏邊界大圈，兩種棋盤及多人模式皆可選。
+<br>Route v2 為實驗試玩版：15×15 三人標準開局已通過強度測試，隨機中盤接手仍待改善；尚未通過完整正式版驗收。
 每回合移動完成後，從各玩家的棋子出發，沿空白格與自己的領地判斷可到達範圍。空白格只有一人能到達就歸該玩家；多人能到達或無人能到達則保持空白。此判定忽略暫時禁止格，不受區域大小影響，也不覆蓋既有領地。為避免策略卡在死迴圈，AI 會固定目標、記錄最近路徑、懲罰重複位置；若整體盤面狀態重複，會自動進入脫困模式並重新規劃。
 玩家模式下沒有獨立的 AI 計時：點一下棋盤四側移動 1 格，持續按住可連續移動；玩家每成功移動 1 格，所有 AI 才同步執行 1 步。
 多人搶同一空格時，整個回合取消，所有角色留在原位。搶格位置顯示紅色叉號，下一個成功結算的回合禁止任何人進入，結算後解除；再次搶格會累積禁止格。若玩家完全無路可走，點擊棋盤可原地等待一回合。
@@ -113,7 +114,7 @@ const STRATS=[
  ['apex','APEX-R｜自適應獵場'],
  ['bastion','BASTION-R｜困敵封鎖'],
  ['sweep','SWEEP-R｜邊界大圈'],
- ['atlas','ATLAS-R｜全域競速（15階3人 Trio）']
+ ['atlas','ATLAS-R｜全域競速（15階3人 Route v2）']
 ];
 let n=30,g=[],a=[],turn=0,occ=0,timer=null,run=false,ended=false,steps=8,humanMode=false;
 let stateSeen=new Map(),globalPanic=0;
@@ -121,7 +122,8 @@ let temporaryBlocks=new Set();
 let idleAttempts=0,endReason='';
 let tailHistory=[];
 let strategyPrefs=Array.from({length:8},(_,i)=>i===1?'atlas':STRATS[i%3][0]);
-let atlasWorker=null,atlasPending=null,atlasSequence=0,atlasActions=null;
+let atlasWorker=null,atlasPending=null,atlasSequence=0,atlasActions=null,atlasRouteMemories=null;
+function atlasUsesRoute(){return n===15&&a.length===3;}
 
 const $=s=>document.querySelector(s);
 const inside=(x,y)=>x>=0&&y>=0&&x<n&&y<n;
@@ -785,7 +787,10 @@ function chooseNewTarget(p){
 }
 
 function aiDirection(p){
-  if(p.strategy==='atlas')return atlasActions?.[p.id]??null;
+  if(p.strategy==='atlas'){
+    if(atlasRouteMemories?.[p.id])Object.assign(p,atlasRouteMemories[p.id]);
+    return atlasActions?.[p.id]??null;
+  }
   if(p.loopPlan&&p.loopPos<p.loopPlan.length){
     const d=p.loopPlan[p.loopPos];
     const nx=p.x+D[d][0],ny=p.y+D[d][1];
@@ -871,7 +876,7 @@ function init(){
     a.push(p);g[y][x]=i;occ++;
   }
   renderList();draw();updateShare();syncModeUI();$('#pause').textContent='暫停';$('#joyhint').textContent='點擊或長按棋盤四側來移動';
-  $('#atlasStatus').textContent='ATLAS-R：15×15 三人局使用 Trio v1.1（多步圈地＋完整聯合動作搜尋）；其他模式維持原版。';
+  $('#atlasStatus').textContent='ATLAS-R：15×15 三人局使用 Route v2（訓練路線策略）；其他模式維持原版。';
 }
 
 function recordLoopState(){
@@ -997,7 +1002,7 @@ function resolveTurn(hdir=null){
     if(p.score>before[p.id]){
       p.noGain=0;
       p.atlasEscape=false;p.atlasTarget=null;p.atlasAvoid=null;
-      if(p.strategy==='atlas')p.recent=[];
+      if(p.strategy==='atlas'&&!atlasUsesRoute())p.recent=[];
       p.panic=Math.max(0,p.panic-1);
       if(!p.h&&p.score-before[p.id]>=4){
         p.loopPlan=[];
@@ -1036,7 +1041,7 @@ function cancelAtlas(){
   atlasSequence++;
   if(atlasPending){atlasPending.resolve(null);atlasPending=null;}
   if(atlasWorker){atlasWorker.terminate();atlasWorker=null;}
-  atlasActions=null;
+  atlasActions=null;atlasRouteMemories=null;
 }
 
 function atlasProbabilities(logits){
@@ -1194,38 +1199,52 @@ async function playTurn(hdir=null){
   const human=a.find(p=>p.h);
   if(humanMode&&(hdir===null||(!legalDirs(human).includes(hdir)&&legalDirs(human).length!==0)))return false;
   const id=++atlasSequence;
+  const started=performance.now();
   let timeout;
-  $('#atlasStatus').textContent='ATLAS-R 思考中（首次使用會下載模型）…';
+  const routeMode=atlasUsesRoute();
+  $('#atlasStatus').textContent=routeMode?'ATLAS-R Route v2 思考中…':'ATLAS-R 思考中（首次使用會下載模型）…';
   try{
     if(!atlasWorker){
-      atlasWorker=new Worker('atlas-worker.js?v=trio11');
+      atlasWorker=new Worker(routeMode?'route-worker.js?v=route2':'atlas-worker.js?v=trio11');
       atlasWorker.onmessage=({data})=>{
         if(atlasPending?.id!==data.id)return;
         const pending=atlasPending;atlasPending=null;
-        data.error?pending.reject(new Error(data.error)):pending.resolve(data.logits);
+        data.error?pending.reject(new Error(data.error)):pending.resolve(data);
       };
       atlasWorker.onerror=()=>{
         if(atlasPending){const pending=atlasPending;atlasPending=null;pending.reject(new Error('模型或運算元件下載失敗'));}
       };
     }
-    const logits=await new Promise((resolve,reject)=>{
+    const response=await new Promise((resolve,reject)=>{
       atlasPending={id,resolve,reject};
       timeout=setTimeout(()=>reject(new Error('模型載入逾時')),45000);
-      atlasWorker.postMessage({id,state:{board:g,positions:a.map(p=>[p.x,p.y]),
+      if(routeMode){
+        const players=a.filter(p=>!p.h&&p.strategy==='atlas').map(p=>p.id);
+        atlasWorker.postMessage({id,players,state:{board:g,
+          players:a.map(p=>({id:p.id,x:p.x,y:p.y,score:p.score,active:p.active,dir:p.dir,last:p.last})),
+          own:Object.fromEntries(players.map(i=>[i,a[i]])),blocks:[...temporaryBlocks],
+          turn,occ,globalPanic,stateSeen:[...stateSeen],idleAttempts,tailHistory}});
+      }else atlasWorker.postMessage({id,state:{board:g,positions:a.map(p=>[p.x,p.y]),
         blocks:[...temporaryBlocks].map(k=>k.split(',').map(Number)),turn}});
     });
-    if(id!==atlasSequence||!logits||!run)return false;
-    const probabilities=atlasProbabilities(logits);
-    atlasActions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
+    if(id!==atlasSequence||!response||!run)return false;
+    if(routeMode){
+      atlasActions=a.map(p=>response.decisions[p.id]?.action??null);
+      atlasRouteMemories=Object.fromEntries(Object.entries(response.decisions).map(([i,d])=>[i,d.memory]));
+    }else{
+      const probabilities=atlasProbabilities(response.logits);
+      atlasActions=a.map(p=>p.strategy==='atlas'?atlasChoose(p.id,probabilities):null);
+    }
     const result=resolveTurn(hdir);
-    $('#atlasStatus').textContent='ATLAS-R｜全域競速 '+(n===15&&a.length===3?'Trio v1.1（三人專用）':'v1.1')+' · '+n+'×'+n+'／'+a.length+' 人'+(a.length>3||n===30?'（實驗性，非此模式專用訓練）':'')+' · 瀏覽器本機運算';
+    $('#atlasStatus').dataset.ms=String(performance.now()-started);
+    $('#atlasStatus').textContent='ATLAS-R｜'+(routeMode?'Route v2（三人專用）':'全域競速 v1.1')+' · '+n+'×'+n+'／'+a.length+' 人'+(a.length>3||n===30?'（實驗性，非此模式專用訓練）':'')+' · 瀏覽器本機運算';
     return result;
   }catch(error){
     if(id!==atlasSequence)return false;
     run=false;stop();cancelAtlas();$('#pause').textContent='繼續';
     $('#atlasStatus').textContent='ATLAS-R 載入／運算失敗，遊戲已暫停。請檢查網路後按繼續，或改選其他 AI。'+error.message;
     return false;
-  }finally{clearTimeout(timeout);if(id===atlasSequence)atlasActions=null;}
+  }finally{clearTimeout(timeout);if(id===atlasSequence){atlasActions=null;atlasRouteMemories=null;}}
 }
 
 function start(){
@@ -1248,7 +1267,7 @@ function finish(reason='遊戲結束'){
 }
 function renderList(){
   $('#list').innerHTML=a.map(p=>{
-    const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+'>'+t+(v==='atlas'&&(n===30||a.length>2)?' · 實驗性':'')+'</option>').join('');
+    const opts=STRATS.map(([v,t])=>'<option value="'+v+'"'+(p.strategy===v?' selected':'')+'>'+t+(v==='atlas'&&!atlasUsesRoute()&&(n===30||a.length>2)?' · 實驗性':'')+'</option>').join('');
     return '<div class="row" id="r'+p.id+'"><i class="dot" style="background:'+p.color+'"></i><div><div class="name">'+name(p)+'</div><div class="meta">'+(p.h?'玩家點擊／長按操作':'高階 AI')+'</div>'+(p.h?'':'<select class="strategy" data-id="'+p.id+'">'+opts+'</select>')+'</div></div>';
   }).join('');
 }

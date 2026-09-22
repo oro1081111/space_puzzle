@@ -1,0 +1,2 @@
+# Keep generated worker bytes consistent with the manifest SHA256.
+grid-clash/route-worker.js text eol=lf

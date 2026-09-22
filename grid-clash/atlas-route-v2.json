@@ -1,0 +1,43 @@
+{
+  "name": "ATLAS-R Route v2",
+  "size": 15,
+  "count": 3,
+  "method": "trained_route_parameters_and_short_opening",
+  "weights": {
+    "raceCost": 5.371,
+    "topology": 1,
+    "cuts": 1,
+    "lengthPower": 1,
+    "loopDepth": 16,
+    "loopArea": 300,
+    "loopEff": 48.026,
+    "trapLock": 210.609,
+    "loopLen": 1.217,
+    "beamRace": 2,
+    "turnBias": 4,
+    "bbox": 3,
+    "trap": 3.314,
+    "edgePlan": 145.04,
+    "scaledPhase": 0,
+    "avoidClash": 1,
+    "race": 37.265,
+    "enemy": 12.757,
+    "space": 7.323,
+    "contest": 125.133,
+    "dist": 0.884,
+    "openings": {
+      "2": {
+        "plan": [
+          2,
+          2
+        ],
+        "style": "candidate"
+      }
+    }
+  },
+  "worker_sha256": "6ac42a88f21fb9457f5a98f7188ab236fe2afc4aaf9531196d2b64ceebcdf6e7",
+  "source_sha256": "d41978f70ea72461d96c161d09eba429590fa37346d6dea7d117dd3030658110",
+  "release_approved": false,
+  "release_channel": "experimental",
+  "experimental_publish_authorized": true
+}

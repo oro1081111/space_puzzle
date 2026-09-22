@@ -22,6 +22,19 @@ seededMath.random = () => {
   return seed/4294967296;
 };
 const extracted = script.slice(script.indexOf('const C='), script.indexOf('const boardbox='));
+let routeContext;
+function routeDecide(message){
+  if(!routeContext){
+    const vm=require('node:vm');
+    routeContext=vm.createContext({self:{},structuredClone});
+    vm.runInContext(fs.readFileSync(path.join(__dirname,'../grid-clash/route-worker.js'),'utf8'),routeContext);
+  }
+  let result;
+  routeContext.self.postMessage=data=>result=data;
+  routeContext.self.onmessage({data:structuredClone(message)});
+  if(result.error)throw new Error(result.error);
+  return result.decisions;
+}
 let core = extracted;
 // Offline ablations only; never enabled by browser requests.
 const ablation=process.env.TRIO_ABLATION||'';
@@ -46,13 +59,16 @@ if(ablation){
     return reactiveChoice(player,probabilities);
   };`;
 }
-const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
-  const originalAI=aiDirection, originalTarget=chooseNewTarget;
+const game = new Function('document','Math','routeDecide', 'let requestedSize=30;\n'+core + `
+  let originalAI=aiDirection;
+  const originalTarget=chooseNewTarget;
+`+fs.readFileSync(path.join(__dirname,'teacher.js'),'utf8')+`
   const state=()=>({board:g,positions:a.map(p=>[p.x,p.y]),scores:a.map(p=>p.score),
     blocks:[...temporaryBlocks].map(k=>k.split(',').map(Number)).sort((u,v)=>u[1]-v[1]||u[0]-v[0]),
     turn,ended,idleAttempts,tailHistory,active:a.map(p=>canExpand(p))});
   return {
     reset(opts){
+      candidateWeights=opts.weights||{};
       requestedSize=opts.size||30;
       $('#size').value=String(requestedSize);
       $('#count').value=String(opts.count||2);init();run=true;
@@ -63,11 +79,55 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
         turn=opts.turn||0;idleAttempts=opts.idleAttempts||0;tailHistory=structuredClone(opts.tailHistory||[]);recountScores();
       }
       a.forEach((p,i)=>p.strategy=(opts.styles||[])[i]||p.strategy);
+      if(!opts.board)for(const p of a)if(p.strategy==='candidate'&&candidateWeights.openings?.[p.id]){
+        const opening=candidateWeights.openings[p.id];
+        p.loopPlan=opening.plan.slice();p.loopPos=0;p.strategy=opening.style;
+      }
       return state();
+    },
+    fastMatch(opts){
+      this.reset(opts);let attempts=0;
+      while(!ended&&attempts<12*n*n){this.play(['ai','ai','ai']);attempts++;}
+      return {scores:a.map(p=>p.score),finished:ended,attempts,turn,endReason,idleAttempts};
+    },
+    route(players){
+      const decisions=routeDecide({id:1,players,state:{board:g,
+        players:a.map(p=>({id:p.id,x:p.x,y:p.y,score:p.score,active:p.active,dir:p.dir,last:p.last})),
+        own:Object.fromEntries(players.map(i=>[i,a[i]])),blocks:[...temporaryBlocks],
+        turn,occ,globalPanic,stateSeen:[...stateSeen],idleAttempts,tailHistory}});
+      const actions=a.map(()=>null);
+      atlasActions=a.map(p=>decisions[p.id]?.action??null);
+      atlasRouteMemories=Object.fromEntries(Object.entries(decisions).map(([i,d])=>[i,d.memory]));
+      aiDirection=p=>actions[p.id]=originalAI(p);
+      chooseNewTarget=p=>actions[p.id]=originalTarget(p);
+      try{const advanced=resolveTurn();return {...state(),advanced,actions};}
+      finally{atlasActions=null;atlasRouteMemories=null;}
+    },
+    fastTeacher(opts){
+      this.reset(opts);let attempts=0,plans=0,simulated=0,maxDecisionMs=0;
+      const started=Date.now();
+      while(!ended&&attempts<12*n*n&&Date.now()-started<(opts.options.budgetMs||600000)){
+        const tick=Date.now();
+        const result=this.teacher(opts.player,{...opts.options,seed:101+turn*31});
+        plans+=result.choice.rows.length>0;
+        simulated+=result.choice.rows.reduce((sum,r)=>sum+r.simulated,0);
+        maxDecisionMs=Math.max(maxDecisionMs,Date.now()-tick);attempts++;
+      }
+      return {scores:a.map(p=>p.score),finished:ended,attempts,turn,endReason,idleAttempts,plans,simulated,maxDecisionMs};
     },
     step(actions){
       aiDirection=p=>actions[p.id]??null;chooseNewTarget=()=>null;
       const advanced=resolveTurn();return {...state(),advanced};
+    },
+    teacher(player,opts={},probe=false){
+      const saved=teacherSnapshot();
+      if(probe)teacherCopy(saved);
+      const choice=teacherChoose(player,opts);
+      if(probe){teacherRestore(saved);return {...state(),choice};}
+      const proposed=a.map(()=>null);
+      aiDirection=p=>proposed[p.id]=p.id===player?choice.action:originalAI(p);
+      chooseNewTarget=p=>proposed[p.id]=p.id===player?null:originalTarget(p);
+      const advanced=resolveTurn();return {...state(),advanced,actions:proposed,choice};
     },
     atlas(logits,overrides={}){
       const probabilities=atlasProbabilities(logits.flat());
@@ -106,7 +166,7 @@ const game = new Function('document','Math', 'let requestedSize=30;\n'+core + `
     },
     capture(){resolveAllCaptures();return state();}
   };
-`)(document,seededMath);
+`)(document,seededMath,routeDecide);
 readline.createInterface({input:process.stdin}).on('line', line => {
   try {
     const msg=JSON.parse(line);
@@ -116,6 +176,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       const priorSeed=seed;
       try{result=game.advise(msg.player,msg.style);}finally{seed=priorSeed;}
     }else result=msg.op==='reset'?game.reset(msg):
+      msg.op==='fastMatch'?game.fastMatch(msg):
+      msg.op==='fastTeacher'?game.fastTeacher(msg):
+      msg.op==='route'?game.route(msg.players):
+      msg.op==='teacher'?game.teacher(msg.player,msg.options,msg.probe):
       msg.op==='match3'?game.match3(msg.logits,msg.opponent_logits,msg.seat):
       msg.op==='capture'?game.capture():msg.op==='atlas'?game.atlas(msg.logits,msg.overrides):msg.op==='play'?game.play(msg.actions):game.step(msg.actions);
     process.stdout.write(JSON.stringify(result)+'\n');

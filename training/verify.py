@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -10,11 +11,27 @@ from training.engine import Game, RULE_VERSION, simple_action
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def low_priority():
+    if os.name == 'nt':
+        import ctypes
+        kernel=ctypes.windll.kernel32
+        kernel.GetCurrentProcess.restype=ctypes.c_void_p
+        kernel.SetPriorityClass.argtypes=[ctypes.c_void_p,ctypes.c_uint32]
+        if not kernel.SetPriorityClass(kernel.GetCurrentProcess(),0x4000):
+            raise ctypes.WinError()
+
+
 class Oracle:
-    def __init__(self):
-        self.process = subprocess.Popen(['node', str(ROOT/'training/oracle.cjs')],
+    def __init__(self, source_root=None):
+        self.source_root = Path(source_root).resolve() if source_root else ROOT
+        environment = os.environ.copy()
+        if source_root:
+            environment.pop('TRIO_SOURCE_REF', None)
+            environment.pop('TRIO_ABLATION', None)
+        self.process = subprocess.Popen(['node', str(self.source_root/'training/oracle.cjs')],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        text=True, encoding='utf-8')
+                                        text=True, encoding='utf-8', env=environment,
+                                        creationflags=subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name=='nt' else 0)
 
     def call(self, **message):
         self.process.stdin.write(json.dumps(message)+'\n')
